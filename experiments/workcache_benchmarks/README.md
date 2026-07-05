@@ -36,6 +36,7 @@ Every run writes:
 - `raw/verifications.jsonl`
 - `raw/task_results.jsonl`
 - `cache/cache_ops.jsonl`
+- `cache/workcache_source_events.jsonl`
 - `cache/validity_checks.jsonl`
 - `cache/tree_updates.jsonl`
 - `cache/evictions.jsonl`
@@ -70,6 +71,26 @@ The real runner requires local `.env` API keys and the upstream tau2 virtual env
 Use `--repeat-passes N` to rerun the same selected tasks inside the same method+benchmark cache scope. This is the intended warm-cache design check: traces keep pass-specific `run_id` values, while cache reuse remains isolated to the benchmark and method being evaluated.
 Use `--benchmarks financebench,promptpg-tabmwp` for staged runs, and `--continue-on-task-error` only when a large run should record official runner timeouts or task-level infrastructure errors as failed tasks instead of discarding the whole run.
 Provider-backed direct LLM calls use bounded retries for transient transport failures. Tune them with `--provider-timeout`, `--provider-retries`, and `--provider-retry-backoff`; failed attempts are recorded in response payload files and successful costs still come from the final provider usage.
+
+## Resume
+
+The real runner is checkpointed at task-run granularity. By default, running the same `--exp-id` starts a fresh run and clears known experiment outputs under that run directory, including persisted Hypha sqlite cache files. Add `--resume` to continue an interrupted run with the same arguments.
+
+Resume uses:
+
+- `checkpoint/completed_tasks.jsonl` to skip completed `run_id` values.
+- `checkpoint/completed_scopes.jsonl` to avoid duplicating completed method+benchmark snapshots.
+- `cache/workcache_source_events.jsonl` to replay completed source events into the Hypha sqlite cache before pending tasks continue.
+- `checkpoint/run_state.json` for current `running`, `paused`, or `completed` status.
+
+The resume path validates the requested config against the existing `config.json`. If arguments such as `--method-suite`, `--limit`, `--repeat-passes`, `--benchmarks`, `--finance-top-k`, model, or base URL differ, start a new `--exp-id` instead of resuming.
+
+For a small staged smoke:
+
+```sh
+python3 experiments/workcache_benchmarks/run_real_samples.py --limit 1 --benchmarks promptpg-tabmwp --method-suite main --exp-id resume_smoke --stop-after-task-runs 1
+python3 experiments/workcache_benchmarks/run_real_samples.py --limit 1 --benchmarks promptpg-tabmwp --method-suite main --exp-id resume_smoke --resume
+```
 
 ## Metrics
 

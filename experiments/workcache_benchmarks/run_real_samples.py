@@ -10,6 +10,7 @@ import http.client
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -18,7 +19,7 @@ import urllib.request
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from metrics import build_tables
 from protocol import (
@@ -50,6 +51,18 @@ HYPHA_WORKCACHE_TREES = (
   "MemoryTree",
   "PromptPrefixTree",
 )
+WORKCACHE_SOURCE_EVENTS_TRACE = "cache/workcache_source_events.jsonl"
+COMPLETED_TASKS_CHECKPOINT = "checkpoint/completed_tasks.jsonl"
+COMPLETED_SCOPES_CHECKPOINT = "checkpoint/completed_scopes.jsonl"
+RUN_STATE_CHECKPOINT = "checkpoint/run_state.json"
+SNAPSHOT_RUNTIME_EVENT_TYPES = {
+  "agent.reasoning.completed",
+  "context.build.completed",
+  "eval.completed",
+  "llm.cache.write",
+  "model.call.completed",
+  "tool.call.completed",
+}
 
 # DeepSeek official pricing page for deepseek-v4-pro, USD per 1M tokens.
 # See config.json in each run for the source URL and retrieval date.
@@ -160,6 +173,17 @@ def read_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
   return rows
 
 
+def read_jsonl_file(path: Path) -> list[dict[str, Any]]:
+  if not path.exists():
+    return []
+  rows: list[dict[str, Any]] = []
+  with path.open("r", encoding="utf-8") as handle:
+    for line in handle:
+      if line.strip():
+        rows.append(json.loads(line))
+  return rows
+
+
 def write_json(path: Path, data: Any) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -170,6 +194,17 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
   with path.open("w", encoding="utf-8") as handle:
     for row in rows:
       handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def append_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+  if not rows:
+    return
+  path.parent.mkdir(parents=True, exist_ok=True)
+  with path.open("a", encoding="utf-8") as handle:
+    for row in rows:
+      handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    handle.flush()
+    os.fsync(handle.fileno())
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -185,19 +220,134 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
       writer.writerow(row)
 
 
-def prepare_run_dir(run_dir: Path) -> None:
+def path_is_relative_to(path: Path, parent: Path) -> bool:
+  try:
+    path.resolve().relative_to(parent.resolve())
+    return True
+  except ValueError:
+    return False
+
+
+def assert_safe_to_clean_run_dir(run_dir: Path) -> None:
+  if not run_dir.exists():
+    return
+  output_root = ROOT / "outputs" / "workcache_benchmarks"
+  if path_is_relative_to(run_dir, output_root):
+    return
+  config_path = run_dir / "config.json"
+  if config_path.exists():
+    try:
+      config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+      config = {}
+    if config.get("trace_schema_version") == TRACE_SCHEMA_VERSION and config.get("mode") == "real":
+      return
+  raise RuntimeError(
+    f"refusing to clean non-benchmark output directory without a real-run config marker: {run_dir}"
+  )
+
+
+def remove_known_run_artifacts(run_dir: Path) -> None:
+  if not run_dir.exists():
+    return
+  assert_safe_to_clean_run_dir(run_dir)
+  for rel_path in (
+    "raw",
+    "cache",
+    "graph",
+    "prompts",
+    "derived",
+    "payloads",
+    "checkpoint",
+    "config.json",
+  ):
+    path = run_dir / rel_path
+    if path.is_dir():
+      shutil.rmtree(path)
+    elif path.exists():
+      path.unlink()
+
+
+def prepare_run_dir(run_dir: Path, *, resume: bool) -> None:
+  if not resume:
+    remove_known_run_artifacts(run_dir)
   for rel_path in REQUIRED_TRACE_FILES:
     path = run_dir / rel_path
     if rel_path.endswith(".jsonl"):
       path.parent.mkdir(parents=True, exist_ok=True)
-      path.write_text("", encoding="utf-8")
+      if not path.exists():
+        path.write_text("", encoding="utf-8")
   for rel_dir in (
+    "checkpoint",
     "derived",
     "payloads/llm_responses",
     "payloads/tool_outputs",
     "prompts/prompt_texts",
   ):
     (run_dir / rel_dir).mkdir(parents=True, exist_ok=True)
+
+
+def empty_records() -> dict[str, list[dict[str, Any]]]:
+  return {
+    rel_path: []
+    for rel_path in REQUIRED_TRACE_FILES
+    if rel_path.endswith(".jsonl")
+  }
+
+
+def flush_records(run_dir: Path, records: dict[str, list[dict[str, Any]]]) -> None:
+  for rel_path, rows in records.items():
+    append_jsonl(run_dir / rel_path, rows)
+
+
+def row_identity(row: dict[str, Any], fields: tuple[str, ...]) -> tuple[Any, ...] | None:
+  values = tuple(row.get(field) for field in fields)
+  if all(value is not None and value != "" for value in values):
+    return values
+  return None
+
+
+TRACE_DEDUPE_KEYS: dict[str, tuple[str, ...]] = {
+  "raw/runtime_events.jsonl": ("event_id",),
+  "raw/llm_calls.jsonl": ("call_id",),
+  "raw/tool_calls.jsonl": ("tool_call_id",),
+  "raw/observations.jsonl": ("observation_id",),
+  "raw/verifications.jsonl": ("verification_id",),
+  "raw/task_results.jsonl": ("run_id",),
+  "cache/cache_ops.jsonl": ("cache_op_id",),
+  WORKCACHE_SOURCE_EVENTS_TRACE: ("event_id",),
+  "cache/validity_checks.jsonl": ("validity_check_id",),
+  "cache/tree_updates.jsonl": ("tree_update_id",),
+  "cache/evictions.jsonl": ("eviction_id",),
+  "graph/work_graph_nodes.jsonl": ("method", "benchmark", "run_id", "node_id"),
+  "graph/work_graph_edges.jsonl": ("method", "benchmark", "run_id", "edge_id"),
+  "graph/demand_signals.jsonl": ("method", "benchmark", "run_id", "demand_signal_id"),
+  "prompts/prompt_assemblies.jsonl": ("prompt_id",),
+}
+
+
+def compact_jsonl(path: Path, key_fields: tuple[str, ...]) -> None:
+  rows = read_jsonl_file(path)
+  if not rows:
+    return
+  keyed: dict[tuple[Any, ...], dict[str, Any]] = {}
+  unkeyed: list[dict[str, Any]] = []
+  for row in rows:
+    key = row_identity(row, key_fields)
+    if key is None:
+      unkeyed.append(row)
+      continue
+    if key in keyed:
+      del keyed[key]
+    keyed[key] = row
+  deduped = unkeyed + list(keyed.values())
+  if len(deduped) != len(rows):
+    write_jsonl(path, deduped)
+
+
+def compact_trace_files(run_dir: Path) -> None:
+  for rel_path, key_fields in TRACE_DEDUPE_KEYS.items():
+    compact_jsonl(run_dir / rel_path, key_fields)
 
 
 def unique_methods(methods: list[MethodSpec] | tuple[MethodSpec, ...]) -> list[MethodSpec]:
@@ -224,6 +374,172 @@ def select_methods(suite: str) -> list[MethodSpec]:
   if suite not in suites:
     raise ValueError(f"unknown method suite {suite!r}; expected one of {', '.join(sorted(suites))}")
   return suites[suite]
+
+
+def scope_key(method: MethodSpec, benchmark: str) -> str:
+  return f"{slug(method.name)}::{benchmark}"
+
+
+def expected_scope_run_ids(
+  exp_id: str,
+  method: MethodSpec,
+  benchmark: str,
+  tasks: list[dict[str, Any]],
+  repeat_passes: int,
+) -> list[str]:
+  return [
+    task_run_id(exp_id, method, benchmark, task, repeat_index, repeat_passes)
+    for repeat_index in range(repeat_passes)
+    for task in tasks
+  ]
+
+
+def completed_task_rows(run_dir: Path) -> dict[str, dict[str, Any]]:
+  rows = read_jsonl_file(run_dir / COMPLETED_TASKS_CHECKPOINT)
+  if rows:
+    completed: dict[str, dict[str, Any]] = {}
+    for row in rows:
+      run_id = str(row.get("run_id") or "")
+      if run_id:
+        completed[run_id] = row
+    return completed
+
+  # Legacy compatibility: old completed runs had task_results but no checkpoint.
+  completed = {}
+  for row in read_jsonl_file(run_dir / "raw" / "task_results.jsonl"):
+    run_id = str(row.get("run_id") or "")
+    if run_id:
+      completed[run_id] = {
+        "run_id": run_id,
+        "method": row.get("method"),
+        "benchmark": row.get("benchmark"),
+        "task_id": row.get("task_id"),
+        "repeat_pass": row.get("repeat_pass"),
+        "status": "legacy_completed",
+        "task_success": row.get("success"),
+      }
+  return completed
+
+
+def completed_scope_keys(run_dir: Path) -> set[str]:
+  keys: set[str] = set()
+  for row in read_jsonl_file(run_dir / COMPLETED_SCOPES_CHECKPOINT):
+    key = str(row.get("scope_key") or "")
+    if key:
+      keys.add(key)
+  return keys
+
+
+def validate_resume_config(run_dir: Path, config: dict[str, Any]) -> None:
+  existing_path = run_dir / "config.json"
+  if not existing_path.exists():
+    raise RuntimeError(f"--resume requested but no config.json exists in {run_dir}")
+  existing = json.loads(existing_path.read_text(encoding="utf-8"))
+  comparisons = {
+    "mode": config["mode"],
+    "method_suite": config["method_suite"],
+    "provider": config["provider"],
+    "model": config["model"],
+    "base_url": config["base_url"],
+    "limit_per_benchmark": config["limit_per_benchmark"],
+    "repeat_passes": config["repeat_passes"],
+    "benchmarks": config["benchmarks"],
+    "finance_top_k": config["finance_top_k"],
+  }
+  mismatches = []
+  for key, value in comparisons.items():
+    if existing.get(key) != value:
+      mismatches.append(f"{key}: existing={existing.get(key)!r}, requested={value!r}")
+  if mismatches:
+    raise RuntimeError(
+      "--resume config mismatch; use the original arguments, a new --exp-id, or start a fresh run.\n"
+      + "\n".join(mismatches)
+    )
+
+
+def write_run_state(run_dir: Path, status: str, **extra: Any) -> None:
+  write_json(
+    run_dir / RUN_STATE_CHECKPOINT,
+    {
+      "status": status,
+      "updated_at": utc_now(),
+      **extra,
+    },
+  )
+
+
+def append_completed_task(
+  run_dir: Path,
+  *,
+  run_id: str,
+  method: MethodSpec,
+  benchmark: str,
+  task: dict[str, Any],
+  repeat_index: int,
+  success: bool,
+  source_event_count: int,
+) -> None:
+  append_jsonl(
+    run_dir / COMPLETED_TASKS_CHECKPOINT,
+    [
+      {
+        "run_id": run_id,
+        "method": method.name,
+        "benchmark": benchmark,
+        "task_id": task["task_id"],
+        "repeat_pass": repeat_index + 1,
+        "status": "completed",
+        "task_success": success,
+        "source_event_count": source_event_count,
+        "completed_at": utc_now(),
+      }
+    ],
+  )
+
+
+def append_completed_scope(
+  run_dir: Path,
+  *,
+  method: MethodSpec,
+  benchmark: str,
+  expected_run_ids: list[str],
+  source_event_count: int,
+) -> None:
+  append_jsonl(
+    run_dir / COMPLETED_SCOPES_CHECKPOINT,
+    [
+      {
+        "scope_key": scope_key(method, benchmark),
+        "method": method.name,
+        "benchmark": benchmark,
+        "expected_task_runs": len(expected_run_ids),
+        "source_event_count": source_event_count,
+        "completed_at": utc_now(),
+      }
+    ],
+  )
+
+
+def append_prediction(run_dir: Path, prediction: dict[str, Any]) -> None:
+  append_jsonl(run_dir / "derived" / "predictions.jsonl", [prediction])
+
+
+def load_predictions(run_dir: Path) -> list[dict[str, Any]]:
+  rows = read_jsonl_file(run_dir / "derived" / "predictions.jsonl")
+  by_run_id: dict[str, dict[str, Any]] = {}
+  unkeyed: list[dict[str, Any]] = []
+  for row in rows:
+    run_id = str(row.get("run_id") or "")
+    if not run_id:
+      unkeyed.append(row)
+      continue
+    if run_id in by_run_id:
+      del by_run_id[run_id]
+    by_run_id[run_id] = row
+  predictions = unkeyed + list(by_run_id.values())
+  if len(predictions) != len(rows):
+    write_jsonl(run_dir / "derived" / "predictions.jsonl", predictions)
+  return predictions
 
 
 def hypha_commit() -> str | None:
@@ -420,6 +736,137 @@ class HyphaWorkCacheSession:
       "auditEvents": result["results"][0]["auditEvents"],
       **result["results"][1],
     }
+
+
+def sqlite_sidecar_paths(sqlite_path: Path) -> list[Path]:
+  return [
+    sqlite_path,
+    Path(f"{sqlite_path}-wal"),
+    Path(f"{sqlite_path}-shm"),
+  ]
+
+
+def reset_sqlite_cache(sqlite_path: Path) -> None:
+  for path in sqlite_sidecar_paths(sqlite_path):
+    if path.exists():
+      path.unlink()
+
+
+def source_event_journal_rows(
+  run_dir: Path,
+  method: MethodSpec,
+  benchmark: str,
+  completed_run_ids: set[str],
+) -> list[dict[str, Any]]:
+  rows = []
+  for row in read_jsonl_file(run_dir / WORKCACHE_SOURCE_EVENTS_TRACE):
+    if row.get("method") != method.name or row.get("benchmark") != benchmark:
+      continue
+    run_id = str(row.get("run_id") or "")
+    if run_id and run_id not in completed_run_ids:
+      continue
+    rows.append(row)
+  return rows
+
+
+def load_source_events_for_scope(
+  run_dir: Path,
+  method: MethodSpec,
+  benchmark: str,
+  completed_run_ids: set[str],
+) -> list[dict[str, Any]]:
+  by_event_id: dict[str, dict[str, Any]] = {}
+  for row in source_event_journal_rows(run_dir, method, benchmark, completed_run_ids):
+    event = row.get("event") if isinstance(row.get("event"), dict) else row
+    event_id = str(event.get("id") or row.get("event_id") or "")
+    if not event_id:
+      continue
+    if event_id in by_event_id:
+      del by_event_id[event_id]
+    by_event_id[event_id] = event
+  return list(by_event_id.values())
+
+
+def hydrate_cache_from_completed_tasks(
+  cache: HyphaWorkCacheSession,
+  run_dir: Path,
+  completed_run_ids: set[str],
+  *,
+  resume: bool,
+) -> None:
+  if not resume:
+    return
+  events = load_source_events_for_scope(run_dir, cache.method, cache.benchmark, completed_run_ids)
+  cache.events = list(events)
+  cache.audit_events = []
+  if not cache.policy.get("enabled"):
+    return
+  reset_sqlite_cache(cache.sqlite_path)
+  if events:
+    for start in range(0, len(events), 100):
+      cache.bridge([{"op": "ingest", "events": events[start : start + 100]}])
+
+
+def append_source_event_journal(
+  run_dir: Path,
+  cache: HyphaWorkCacheSession,
+  events: list[dict[str, Any]],
+) -> None:
+  rows = []
+  for event in events:
+    rows.append(
+      {
+        "event_id": event.get("id"),
+        "run_id": event.get("runId"),
+        "method": cache.method.name,
+        "benchmark": cache.benchmark,
+        "cache_scope": cache.scope_id,
+        "event_type": event.get("type"),
+        "timestamp": event.get("timestamp"),
+        "event": event,
+      }
+    )
+  append_jsonl(run_dir / WORKCACHE_SOURCE_EVENTS_TRACE, rows)
+
+
+def row_matches_scope(row: dict[str, Any], method_name: str, benchmark: str) -> bool:
+  return row.get("method") == method_name and row.get("benchmark") == benchmark
+
+
+def remove_rows(path: Path, predicate: Callable[[dict[str, Any]], bool]) -> None:
+  rows = read_jsonl_file(path)
+  if not rows:
+    return
+  kept = [row for row in rows if not predicate(row)]
+  if len(kept) != len(rows):
+    write_jsonl(path, kept)
+
+
+def clean_incomplete_scope_snapshot_outputs(run_dir: Path, method: MethodSpec, benchmark: str) -> None:
+  method_name = method.name
+  for rel_path in (
+    "cache/cache_ops.jsonl",
+    "cache/validity_checks.jsonl",
+    "cache/tree_updates.jsonl",
+    "cache/evictions.jsonl",
+    "graph/work_graph_nodes.jsonl",
+    "graph/work_graph_edges.jsonl",
+    "graph/demand_signals.jsonl",
+  ):
+    remove_rows(
+      run_dir / rel_path,
+      lambda row, method_name=method_name, benchmark=benchmark: row_matches_scope(row, method_name, benchmark),
+    )
+  remove_rows(
+    run_dir / "raw" / "runtime_events.jsonl",
+    lambda row, method_name=method_name, benchmark=benchmark: (
+      row_matches_scope(row, method_name, benchmark)
+      and (
+        str(row.get("event_type") or "").startswith("workcache.")
+        or str(row.get("event_type") or "") in SNAPSHOT_RUNTIME_EVENT_TYPES
+      )
+    ),
+  )
 
 
 class DeepSeekClient:
@@ -2076,6 +2523,17 @@ def main() -> int:
   parser.add_argument("--provider-retries", type=int, default=2)
   parser.add_argument("--provider-retry-backoff", type=float, default=2.0)
   parser.add_argument(
+    "--resume",
+    action="store_true",
+    help="Resume an existing run with the same config, replaying completed source events into Hypha cache scopes.",
+  )
+  parser.add_argument(
+    "--stop-after-task-runs",
+    type=int,
+    default=0,
+    help="Run at most this many pending task-runs, write checkpoints, then pause before finalizing remaining scopes.",
+  )
+  parser.add_argument(
     "--continue-on-task-error",
     action="store_true",
     help="Record task-level runner errors as failed tasks instead of aborting the whole run.",
@@ -2106,15 +2564,12 @@ def main() -> int:
     raise RuntimeError("--tau2-timeout and --tau2-subprocess-timeout must be >= 1")
   if args.provider_timeout < 1 or args.provider_retries < 0 or args.provider_retry_backoff < 0:
     raise RuntimeError("--provider-timeout must be >= 1, --provider-retries >= 0, and --provider-retry-backoff >= 0")
+  if args.stop_after_task_runs < 0:
+    raise RuntimeError("--stop-after-task-runs must be >= 0")
   methods = select_methods(args.method_suite)
 
   run_dir = args.output_dir or ROOT / "outputs" / "workcache_benchmarks" / args.exp_id
-  prepare_run_dir(run_dir)
-  records: dict[str, list[dict[str, Any]]] = {
-    rel_path: []
-    for rel_path in REQUIRED_TRACE_FILES
-    if rel_path.endswith(".jsonl")
-  }
+  prepare_run_dir(run_dir, resume=args.resume)
 
   config = {
     "trace_schema_version": TRACE_SCHEMA_VERSION,
@@ -2136,9 +2591,17 @@ def main() -> int:
     "api_key_value_stored": False,
     "created_at": utc_now(),
     "limit_per_benchmark": args.limit,
+    "finance_top_k": args.finance_top_k,
     "repeat_passes": args.repeat_passes,
     "benchmarks": benchmarks,
     "cache_scope_rule": "cache state is isolated by method and benchmark within this run",
+    "checkpointing": {
+      "enabled": True,
+      "task_checkpoint": COMPLETED_TASKS_CHECKPOINT,
+      "scope_checkpoint": COMPLETED_SCOPES_CHECKPOINT,
+      "source_event_journal": WORKCACHE_SOURCE_EVENTS_TRACE,
+      "resume_replays_completed_source_events": True,
+    },
     "hypha_commit": hypha_commit(),
     "pricing": {
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing",
@@ -2175,7 +2638,26 @@ def main() -> int:
       ],
     },
   }
-  write_json(run_dir / "config.json", config)
+  if args.resume:
+    validate_resume_config(run_dir, config)
+    has_task_checkpoint = (run_dir / COMPLETED_TASKS_CHECKPOINT).exists()
+    has_legacy_task_results = bool(read_jsonl_file(run_dir / "raw" / "task_results.jsonl"))
+    if not has_task_checkpoint and has_legacy_task_results:
+      raise RuntimeError(
+        "--resume requires checkpoint-enabled run output. This run has task results "
+        "but no completed task checkpoint; use a new --exp-id for a fresh run."
+      )
+    compact_trace_files(run_dir)
+  else:
+    write_json(run_dir / "config.json", config)
+  write_run_state(
+    run_dir,
+    "running",
+    resume=args.resume,
+    exp_id=args.exp_id,
+    method_suite=args.method_suite,
+    benchmarks=benchmarks,
+  )
 
   client = DeepSeekClient(
     model=model,
@@ -2185,38 +2667,69 @@ def main() -> int:
     max_retries=args.provider_retries,
     retry_backoff_seconds=args.provider_retry_backoff,
   )
-  predictions: list[dict[str, Any]] = []
+  completed_tasks = completed_task_rows(run_dir) if args.resume else {}
+  completed_run_ids = set(completed_tasks)
+  completed_scopes = completed_scope_keys(run_dir) if args.resume else set()
+  executed_this_invocation = 0
   for method in methods:
     for benchmark in config["benchmarks"]:
       cache = HyphaWorkCacheSession(method, benchmark, run_dir)
       tasks = read_jsonl(BENCHMARK_TASK_FILES[benchmark], args.limit)
+      expected_run_ids = expected_scope_run_ids(
+        args.exp_id,
+        method,
+        benchmark,
+        tasks,
+        args.repeat_passes,
+      )
+      current_scope_key = scope_key(method, benchmark)
+      hydrate_cache_from_completed_tasks(
+        cache,
+        run_dir,
+        completed_run_ids,
+        resume=args.resume,
+      )
+      if current_scope_key in completed_scopes and all(run_id in completed_run_ids for run_id in expected_run_ids):
+        print(
+          f"[{utc_now()}] scope already complete | {method.name} | {benchmark}",
+          flush=True,
+        )
+        continue
+      clean_incomplete_scope_snapshot_outputs(run_dir, method, benchmark)
       for repeat_index in range(args.repeat_passes):
         for task_index, task in enumerate(tasks, start=1):
           run_id = task_run_id(args.exp_id, method, benchmark, task, repeat_index, args.repeat_passes)
+          if run_id in completed_run_ids:
+            print(
+              f"[{utc_now()}] skip completed | pass {repeat_index + 1}/{args.repeat_passes} | "
+              f"{method.name} | {benchmark} | {task['task_id']}",
+              flush=True,
+            )
+            continue
           print(
             f"[{utc_now()}] task {task_index}/{len(tasks)} pass "
             f"{repeat_index + 1}/{args.repeat_passes} | {method.name} | "
             f"{benchmark} | {task['task_id']}",
             flush=True,
           )
+          records = empty_records()
+          source_event_start = len(cache.events)
           task_started = time.perf_counter()
           try:
-            predictions.append(
-              run_task(
-                client,
-                records,
-                run_dir,
-                args.exp_id,
-                method,
-                cache,
-                benchmark,
-                task,
-                args.finance_top_k,
-                repeat_index=repeat_index,
-                repeat_count=args.repeat_passes,
-                tau2_timeout=args.tau2_timeout,
-                tau2_subprocess_timeout=args.tau2_subprocess_timeout,
-              )
+            prediction = run_task(
+              client,
+              records,
+              run_dir,
+              args.exp_id,
+              method,
+              cache,
+              benchmark,
+              task,
+              args.finance_top_k,
+              repeat_index=repeat_index,
+              repeat_count=args.repeat_passes,
+              tau2_timeout=args.tau2_timeout,
+              tau2_subprocess_timeout=args.tau2_subprocess_timeout,
             )
           except Exception as error:
             if not args.continue_on_task_error:
@@ -2227,32 +2740,97 @@ def main() -> int:
               f"{benchmark} | {task['task_id']} | {type(error).__name__}: {str(error)[:300]}",
               flush=True,
             )
-            predictions.append(
-              record_task_failure(
-                records,
-                run_id,
-                task,
-                method,
-                error,
-                latency_ms,
-                repeat_index,
-              )
+            prediction = record_task_failure(
+              records,
+              run_id,
+              task,
+              method,
+              error,
+              latency_ms,
+              repeat_index,
             )
-      append_hypha_cache_snapshot(records, cache, cache.replay_snapshot())
+          flush_records(run_dir, records)
+          new_source_events = cache.events[source_event_start:]
+          append_source_event_journal(run_dir, cache, new_source_events)
+          append_prediction(run_dir, prediction)
+          append_completed_task(
+            run_dir,
+            run_id=run_id,
+            method=method,
+            benchmark=benchmark,
+            task=task,
+            repeat_index=repeat_index,
+            success=bool(prediction.get("success")),
+            source_event_count=len(new_source_events),
+          )
+          completed_run_ids.add(run_id)
+          executed_this_invocation += 1
+          write_run_state(
+            run_dir,
+            "running",
+            resume=args.resume,
+            last_run_id=run_id,
+            completed_task_runs=len(completed_run_ids),
+            executed_this_invocation=executed_this_invocation,
+          )
+          if args.stop_after_task_runs and executed_this_invocation >= args.stop_after_task_runs:
+            compact_trace_files(run_dir)
+            write_run_state(
+              run_dir,
+              "paused",
+              resume=args.resume,
+              last_run_id=run_id,
+              completed_task_runs=len(completed_run_ids),
+              executed_this_invocation=executed_this_invocation,
+              reason="stop_after_task_runs",
+            )
+            print(f"run_dir: {run_dir}")
+            print(f"paused_after_task_runs: {executed_this_invocation}")
+            print(f"resume_command: add --resume with the same arguments and --exp-id {args.exp_id}")
+            return 0
+      if all(run_id in completed_run_ids for run_id in expected_run_ids):
+        snapshot_records = empty_records()
+        append_hypha_cache_snapshot(snapshot_records, cache, cache.replay_snapshot())
+        flush_records(run_dir, snapshot_records)
+        append_completed_scope(
+          run_dir,
+          method=method,
+          benchmark=benchmark,
+          expected_run_ids=expected_run_ids,
+          source_event_count=len(cache.events),
+        )
+        completed_scopes.add(current_scope_key)
+        write_run_state(
+          run_dir,
+          "running",
+          resume=args.resume,
+          completed_task_runs=len(completed_run_ids),
+          completed_scopes=len(completed_scopes),
+          executed_this_invocation=executed_this_invocation,
+        )
 
-  for rel_path, rows in records.items():
-    write_jsonl(run_dir / rel_path, rows)
-  write_jsonl(run_dir / "derived" / "predictions.jsonl", predictions)
+  compact_trace_files(run_dir)
+  predictions = load_predictions(run_dir)
   summary, summary_rows, method_benchmark_rows = summarize(predictions)
   write_json(run_dir / "derived" / "summary.json", summary)
   write_csv(run_dir / "derived" / "summary_by_benchmark.csv", summary_rows)
   write_csv(run_dir / "derived" / "summary_by_method_benchmark.csv", method_benchmark_rows)
   table_outputs = build_tables(run_dir)
+  write_run_state(
+    run_dir,
+    "completed",
+    resume=args.resume,
+    completed_task_runs=len(completed_run_ids),
+    completed_scopes=len(completed_scopes),
+    executed_this_invocation=executed_this_invocation,
+  )
 
   print(f"run_dir: {run_dir}")
   print(f"model: {model}")
   print(f"method_suite: {args.method_suite}")
   print(f"repeat_passes: {args.repeat_passes}")
+  print(f"resume: {args.resume}")
+  print(f"executed_this_invocation: {executed_this_invocation}")
   print(f"methods: {', '.join(method.name for method in methods)}")
   print(f"tasks: {summary['total_tasks']}")
   print(f"success_rate: {summary['overall_success_rate']:.4f}")

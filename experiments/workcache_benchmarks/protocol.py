@@ -32,6 +32,7 @@ REQUIRED_TRACE_FILES = (
   "raw/verifications.jsonl",
   "raw/task_results.jsonl",
   "cache/cache_ops.jsonl",
+  "cache/workcache_source_events.jsonl",
   "cache/validity_checks.jsonl",
   "cache/tree_updates.jsonl",
   "cache/evictions.jsonl",
