@@ -134,10 +134,19 @@ def mechanism_metrics(trace: dict[str, list[dict[str, Any]]], method: str) -> di
   actual_needed = [row for row in signals if bool_value(row.get("actual_needed"))]
   covered_needed = [row for row in actual_needed if bool_value(row.get("predicted"))]
 
-  critical_nodes = [row for row in nodes if bool_value(row.get("critical_path"))]
+  critical_nodes = [
+    row
+    for row in nodes
+    if bool_value(row.get("critical_path")) and row.get("cache_status") != "bypass"
+  ]
   critical_hits = [row for row in critical_nodes if row.get("cache_status") == "hit"]
   mistaken_evictions = [
     row for row in evictions if bool_value(row.get("recomputed_after_eviction"))
+  ]
+  lookup_latencies = [
+    number(row.get("latency_ms"))
+    for row in cache_ops
+    if row.get("result") == "lookup"
   ]
 
   return {
@@ -145,7 +154,7 @@ def mechanism_metrics(trace: dict[str, list[dict[str, Any]]], method: str) -> di
     "Demand Recall": ratio(len(covered_needed), len(actual_needed)),
     "Critical Path Hit Rate": ratio(len(critical_hits), len(critical_nodes)),
     "Eviction Mistake Rate": ratio(len(mistaken_evictions), len(evictions)),
-    "Tree Lookup p95": milliseconds(percentile([number(row.get("latency_ms")) for row in cache_ops], 0.95)),
+    "Tree Lookup p95": milliseconds(percentile(lookup_latencies, 0.95)),
   }
 
 
@@ -196,4 +205,3 @@ def main() -> int:
 
 if __name__ == "__main__":
   raise SystemExit(main())
-

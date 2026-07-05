@@ -6,13 +6,16 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import http.client
 import json
 import os
 import re
+import signal
 import subprocess
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -96,8 +99,41 @@ def slug(value: str) -> str:
   return "".join(ch.lower() if ch.isalnum() else "_" for ch in str(value)).strip("_")
 
 
+def task_run_id(
+  exp_id: str,
+  method: MethodSpec,
+  benchmark: str,
+  task: dict[str, Any],
+  repeat_index: int,
+  repeat_count: int,
+) -> str:
+  pass_suffix = f":pass_{repeat_index + 1}" if repeat_count > 1 else ""
+  return f"{exp_id}:{slug(method.name)}:{benchmark}{pass_suffix}:{slug(task['task_id'])}"
+
+
 def utc_now() -> str:
   return datetime.now(timezone.utc).isoformat()
+
+
+@contextmanager
+def hard_timeout(seconds: int):
+  if seconds <= 0:
+    yield
+    return
+
+  def raise_timeout(_signum: int, _frame: Any) -> None:
+    raise TimeoutError(f"provider request exceeded {seconds}s")
+
+  previous_handler = signal.getsignal(signal.SIGALRM)
+  signal.signal(signal.SIGALRM, raise_timeout)
+  previous_timer = signal.setitimer(signal.ITIMER_REAL, seconds)
+  try:
+    yield
+  finally:
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, previous_handler)
+    if previous_timer[0] > 0:
+      signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
 
 def load_dotenv(path: Path) -> None:
@@ -351,8 +387,15 @@ class HyphaWorkCacheSession:
     self.events.append(event)
     if not self.policy.get("enabled"):
       return []
+    started = time.perf_counter()
     result = self.bridge([{"op": "ingest", "events": [event]}])
+    latency_ms = round((time.perf_counter() - started) * 1000, 3)
+    event.setdefault("metadata", {})["workcacheBridgeLatencyMs"] = latency_ms
     audit_events = result["results"][0]["auditEvents"]
+    per_event_latency_ms = latency_ms / max(1, len(audit_events))
+    for audit_event in audit_events:
+      metadata = audit_event.setdefault("metadata", {})
+      metadata["bridgeLatencyMs"] = round(per_event_latency_ms, 3)
     self.audit_events.extend(audit_events)
     return audit_events
 
@@ -380,10 +423,22 @@ class HyphaWorkCacheSession:
 
 
 class DeepSeekClient:
-  def __init__(self, model: str, base_url: str, api_key: str):
+  def __init__(
+    self,
+    model: str,
+    base_url: str,
+    api_key: str,
+    *,
+    timeout_seconds: int = 180,
+    max_retries: int = 2,
+    retry_backoff_seconds: float = 2.0,
+  ):
     self.model = model
     self.base_url = base_url.rstrip("/")
     self.api_key = api_key
+    self.timeout_seconds = timeout_seconds
+    self.max_retries = max_retries
+    self.retry_backoff_seconds = retry_backoff_seconds
 
   def request_payload(
     self,
@@ -419,17 +474,73 @@ class DeepSeekClient:
       temperature=temperature,
     )
 
-    request = urllib.request.Request(url, method="POST")
-    request.add_header("Authorization", f"Bearer {self.api_key}")
-    request.add_header("Content-Type", "application/json")
-
     started = time.perf_counter()
-    try:
-      with urllib.request.urlopen(request, data=json.dumps(payload).encode("utf-8"), timeout=180) as response:
-        response_data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-      body = exc.read().decode("utf-8", errors="replace")
-      raise RuntimeError(f"provider HTTP {exc.code}: {body[:500]}") from exc
+    attempts: list[dict[str, Any]] = []
+    response_data: dict[str, Any] | None = None
+    encoded_payload = json.dumps(payload).encode("utf-8")
+    for attempt_index in range(self.max_retries + 1):
+      attempt_started = time.perf_counter()
+      request = urllib.request.Request(url, method="POST")
+      request.add_header("Authorization", f"Bearer {self.api_key}")
+      request.add_header("Content-Type", "application/json")
+      try:
+        with hard_timeout(self.timeout_seconds):
+          with urllib.request.urlopen(
+            request,
+            data=encoded_payload,
+            timeout=self.timeout_seconds,
+          ) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+        attempts.append(
+          {
+            "attempt": attempt_index + 1,
+            "ok": True,
+            "latency_ms": round((time.perf_counter() - attempt_started) * 1000, 2),
+          }
+        )
+        break
+      except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        retryable = exc.code in {408, 409, 425, 429, 500, 502, 503, 504}
+        attempts.append(
+          {
+            "attempt": attempt_index + 1,
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "error_message": f"provider HTTP {exc.code}: {body[:500]}",
+            "latency_ms": round((time.perf_counter() - attempt_started) * 1000, 2),
+            "retryable": retryable,
+          }
+        )
+        if not retryable or attempt_index >= self.max_retries:
+          raise RuntimeError(f"provider HTTP {exc.code}: {body[:500]}") from exc
+      except (
+        TimeoutError,
+        urllib.error.URLError,
+        http.client.IncompleteRead,
+        http.client.RemoteDisconnected,
+        ConnectionError,
+        OSError,
+      ) as exc:
+        attempts.append(
+          {
+            "attempt": attempt_index + 1,
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc)[:500],
+            "latency_ms": round((time.perf_counter() - attempt_started) * 1000, 2),
+            "retryable": True,
+          }
+        )
+        if attempt_index >= self.max_retries:
+          raise RuntimeError(
+            f"provider request failed after {len(attempts)} attempt(s): "
+            f"{type(exc).__name__}: {str(exc)[:500]}"
+          ) from exc
+      sleep_seconds = self.retry_backoff_seconds * (2**attempt_index)
+      time.sleep(sleep_seconds)
+    if response_data is None:
+      raise RuntimeError("provider request failed without response data")
     latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
     choice = response_data["choices"][0]
@@ -443,6 +554,7 @@ class DeepSeekClient:
       "usage": usage,
       "cost_usd": provider_cost(usage),
       "raw": response_data,
+      "attempts": attempts,
       "request": payload,
     }
 
@@ -483,6 +595,7 @@ def computation_payload(
     "usage": response.get("usage") or {},
     "finishReason": response.get("finish_reason"),
     "latencyMs": response.get("latency_ms"),
+    "cacheReuse": bool((response.get("raw") or {}).get("cacheReuse")),
     "validity": {
       "status": "valid",
       "sourceHashes": {
@@ -508,6 +621,7 @@ def cached_response_from_computation(
     "latency_ms": 0,
     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "prompt_cache_hit_tokens": 0},
     "cost_usd": 0.0,
+    "attempts": [],
     "raw": {
       "cached_from_workcache": True,
       "block_id": block.get("id"),
@@ -880,6 +994,7 @@ def append_hypha_cache_snapshot(
   cache: HyphaWorkCacheSession,
   snapshot: dict[str, Any],
 ) -> None:
+  source_events_by_id = {event["id"]: event for event in cache.events}
   for source_event in cache.events:
     records["raw/runtime_events.jsonl"].append(
       {
@@ -895,7 +1010,50 @@ def append_hypha_cache_snapshot(
       }
     )
 
-  for index, audit_event in enumerate(snapshot.get("auditEvents", [])):
+  audit_events = snapshot.get("auditEvents", [])
+  audit_counts_by_source: dict[str, int] = {}
+  hit_cache_keys: set[str] = set()
+  miss_cache_keys: set[str] = set()
+  lookup_cache_keys: set[str] = set()
+  for audit_event in audit_events:
+    payload = audit_event.get("payload", {})
+    source_event_id = str(payload.get("sourceEventId") or "")
+    if source_event_id:
+      audit_counts_by_source[source_event_id] = audit_counts_by_source.get(source_event_id, 0) + 1
+    cache_key = payload.get("cacheKey")
+    event_type = audit_event.get("type", "")
+    if isinstance(cache_key, str):
+      if event_type == "workcache.lookup":
+        lookup_cache_keys.add(cache_key)
+      elif event_type == "workcache.hit":
+        hit_cache_keys.add(cache_key)
+      elif event_type == "workcache.miss":
+        miss_cache_keys.add(cache_key)
+
+  def audit_latency_ms(audit_event: dict[str, Any]) -> float:
+    payload = audit_event.get("payload", {})
+    metadata = audit_event.get("metadata", {})
+    candidates = [
+      metadata.get("bridgeLatencyMs") if isinstance(metadata, dict) else None,
+      payload.get("latencyMs") if isinstance(payload, dict) else None,
+    ]
+    source_event_id = str(payload.get("sourceEventId") or "") if isinstance(payload, dict) else ""
+    source_event = source_events_by_id.get(source_event_id)
+    if source_event:
+      source_metadata = source_event.get("metadata", {})
+      source_latency = (
+        source_metadata.get("workcacheBridgeLatencyMs")
+        if isinstance(source_metadata, dict)
+        else None
+      )
+      if isinstance(source_latency, (int, float)):
+        candidates.append(source_latency / max(1, audit_counts_by_source.get(source_event_id, 1)))
+    for candidate in candidates:
+      if isinstance(candidate, (int, float)):
+        return round(float(candidate), 3)
+    return 0.0
+
+  for index, audit_event in enumerate(audit_events):
     payload = audit_event.get("payload", {})
     event_type = audit_event.get("type", "")
     result = event_type.replace("workcache.", "")
@@ -929,7 +1087,7 @@ def append_hypha_cache_snapshot(
         "result": result,
         "validation_result": "valid" if event_type == "workcache.hit" else payload.get("reason", ""),
         "stale": False,
-        "latency_ms": 0,
+        "latency_ms": audit_latency_ms(audit_event),
         "source_event_id": payload.get("sourceEventId"),
         "source_event_type": payload.get("sourceEventType"),
       }
@@ -949,20 +1107,33 @@ def append_hypha_cache_snapshot(
         }
       )
 
+  node_run_ids: dict[str, str] = {}
   for run_id, graph in (snapshot.get("graphs") or {}).items():
     if not graph:
       continue
     for node in graph.get("nodes", []):
+      node_id = node.get("id") or node.get("nodeId")
+      if isinstance(node_id, str):
+        node_run_ids[node_id] = str(run_id)
+      node_cache_key = node.get("cacheKey")
+      if isinstance(node_cache_key, str) and node_cache_key in hit_cache_keys:
+        cache_status = "hit"
+      elif isinstance(node_cache_key, str) and node_cache_key in miss_cache_keys:
+        cache_status = "miss"
+      elif node.get("outputBlockIds"):
+        cache_status = "materialized"
+      else:
+        cache_status = "bypass"
       records["graph/work_graph_nodes.jsonl"].append(
         {
-          "node_id": node.get("id") or node.get("nodeId"),
+          "node_id": node_id,
           "run_id": run_id,
           "task_id": str(run_id).split(":")[-1],
           "benchmark": cache.benchmark,
           "method": cache.method.name,
           "tree_type": node.get("primaryTreeType"),
           "critical_path": bool(node.get("criticality", 0) >= 1 or node.get("status") == "done"),
-          "cache_status": "materialized" if node.get("outputBlockIds") else "bypass",
+          "cache_status": cache_status,
           "payload": node,
         }
       )
@@ -983,17 +1154,23 @@ def append_hypha_cache_snapshot(
       )
 
   for signal in snapshot.get("demandSignals", []):
+    source_node_id = str(signal.get("sourceNodeId") or "")
+    signal_run_id = node_run_ids.get(source_node_id, "")
+    target_key = signal.get("targetKey")
+    predicted = bool(cache.method.cache_config.get("WorkGraphDemand", False))
+    actual_needed = isinstance(target_key, str) and target_key in lookup_cache_keys
+    actual_used = isinstance(target_key, str) and target_key in hit_cache_keys
     records["graph/demand_signals.jsonl"].append(
       {
         "demand_signal_id": signal.get("id") or signal.get("signalId"),
-        "run_id": str(signal.get("sourceNodeId", "")).split(":")[0],
-        "task_id": "",
+        "run_id": signal_run_id,
+        "task_id": str(signal_run_id).split(":")[-1] if signal_run_id else "",
         "benchmark": cache.benchmark,
         "method": cache.method.name,
         "tree_type": signal.get("targetTreeType"),
-        "predicted": True,
-        "actual_needed": bool(signal.get("targetBlockId") or signal.get("targetKey")),
-        "actual_used": bool(signal.get("targetBlockId")),
+        "predicted": predicted,
+        "actual_needed": actual_needed,
+        "actual_used": actual_used,
         "demand_score": signal.get("demandScore"),
         "payload": signal,
       }
@@ -1014,6 +1191,8 @@ def run_tau2_official(
   model: str,
   task: dict[str, Any],
   cache: HyphaWorkCacheSession,
+  tau2_timeout: int,
+  subprocess_timeout: int,
 ) -> dict[str, Any]:
   if not TAU2_PYTHON.exists():
     raise RuntimeError(f"tau2 official venv python is missing: {TAU2_PYTHON}")
@@ -1034,7 +1213,7 @@ def run_tau2_official(
       "--save-dir",
       str(save_dir),
       "--timeout",
-      "300",
+      str(tau2_timeout),
       "--hypha-root",
       str(HYPHA_ROOT),
       "--workcache-bridge",
@@ -1052,7 +1231,7 @@ def run_tau2_official(
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     cwd=str(ROOT),
-    timeout=420,
+    timeout=subprocess_timeout,
     check=False,
   )
   if result.returncode != 0:
@@ -1097,7 +1276,7 @@ def append_tau2_official_trace(
 ) -> None:
   simulation = tau2_payload["simulation"]
   for source_event in simulation.get("workcache_source_events", []):
-    cache.ingest(source_event)
+    cache.events.append(source_event)
 
   messages = simulation.get("messages", [])
   agent_model_events = [
@@ -1281,8 +1460,12 @@ def run_task(
   benchmark: str,
   task: dict[str, Any],
   finance_top_k: int,
+  repeat_index: int = 0,
+  repeat_count: int = 1,
+  tau2_timeout: int = 300,
+  tau2_subprocess_timeout: int = 420,
 ) -> dict[str, Any]:
-  run_id = f"{exp_id}:{slug(method.name)}:{benchmark}:{slug(task['task_id'])}"
+  run_id = task_run_id(exp_id, method, benchmark, task, repeat_index, repeat_count)
   append_runtime_events(records, run_id, task, method, "agent.run.started")
   started = time.perf_counter()
 
@@ -1497,7 +1680,15 @@ def run_task(
       }
     )
   else:
-    tau2_payload = run_tau2_official(run_dir, run_id, client.model, task, cache)
+    tau2_payload = run_tau2_official(
+      run_dir,
+      run_id,
+      client.model,
+      task,
+      cache,
+      tau2_timeout,
+      tau2_subprocess_timeout,
+    )
     obs_payload = {
       "domain": task["input"].get("domain"),
       "has_initial_state": task["input"].get("initial_state") is not None,
@@ -1587,6 +1778,7 @@ def run_task(
         "task_id": task["task_id"],
         "benchmark": benchmark,
         "method": method.name,
+        "repeat_pass": repeat_index + 1,
         "agent_id": f"agent.{benchmark}.deepseek_pro",
         "success": success,
         "latency_ms": latency_ms,
@@ -1601,6 +1793,7 @@ def run_task(
       "method": method.name,
       "benchmark": benchmark,
       "task_id": task["task_id"],
+      "repeat_pass": repeat_index + 1,
       "success": success,
       "latency_ms": latency_ms,
       "agent_cost_usd": usage["agent_cost_usd"],
@@ -1633,8 +1826,28 @@ def run_task(
     )
   else:
     response = cached_response_from_computation(computation_lookup, request_payload)
+    response["raw"] = {
+      **(response.get("raw") or {}),
+      "cacheReuse": True,
+    }
+    ingest_model_call(
+      cache,
+      run_id=run_id,
+      benchmark=benchmark,
+      client=client,
+      request_payload=request_payload,
+      response=response,
+      step_id="agent_prediction",
+    )
   response_path = run_dir / "payloads" / "llm_responses" / f"{slug(run_id)}_agent.json"
-  write_json(response_path, {"request": response["request"], "response": response["raw"]})
+  write_json(
+    response_path,
+    {
+      "request": response["request"],
+      "response": response["raw"],
+      "provider_attempts": response.get("attempts") or [],
+    },
+  )
   parsed = extract_json(response["content"])
 
   success, score_details = score_answer(benchmark, parsed, task.get("gold", {}))
@@ -1681,6 +1894,7 @@ def run_task(
       "finish_reason": response["finish_reason"],
       "response_path": str(response_path.relative_to(run_dir)),
       "workcache_status": workcache_lookup_status(computation_lookup, response_executed),
+      "provider_attempts": len(response.get("attempts") or []),
     }
   )
   records["raw/verifications.jsonl"].append(
@@ -1702,6 +1916,7 @@ def run_task(
       "task_id": task["task_id"],
       "benchmark": benchmark,
       "method": method.name,
+      "repeat_pass": repeat_index + 1,
       "agent_id": f"agent.{benchmark}.deepseek_pro",
       "success": success,
       "latency_ms": latency_ms,
@@ -1716,6 +1931,7 @@ def run_task(
     "method": method.name,
     "benchmark": benchmark,
     "task_id": task["task_id"],
+    "repeat_pass": repeat_index + 1,
     "success": success,
     "latency_ms": latency_ms,
     "agent_cost_usd": response["cost_usd"],
@@ -1724,6 +1940,68 @@ def run_task(
     "prediction": parsed,
     "gold_answer": task.get("gold", {}).get("answer"),
     "score_details": score_details,
+  }
+
+
+def record_task_failure(
+  records: dict[str, list[dict[str, Any]]],
+  run_id: str,
+  task: dict[str, Any],
+  method: MethodSpec,
+  error: Exception,
+  latency_ms: float,
+  repeat_index: int,
+) -> dict[str, Any]:
+  error_details = {
+    "scorer": "runner_error",
+    "error_type": type(error).__name__,
+    "error_message": str(error)[:2000],
+  }
+  append_runtime_events(records, run_id, task, method, "agent.run.failed")
+  records["raw/verifications.jsonl"].append(
+    {
+      "verification_id": f"verify:{run_id}:runner_error",
+      "run_id": run_id,
+      "task_id": task["task_id"],
+      "benchmark": task["benchmark"],
+      "method": method.name,
+      "verifier": "runner_error",
+      "success": False,
+      "cache_status": "not_applicable",
+      "payload": error_details,
+    }
+  )
+  records["raw/task_results.jsonl"].append(
+    {
+      "run_id": run_id,
+      "task_id": task["task_id"],
+      "benchmark": task["benchmark"],
+      "method": method.name,
+      "repeat_pass": repeat_index + 1,
+      "agent_id": f"agent.{task['benchmark']}.deepseek_pro",
+      "success": False,
+      "latency_ms": latency_ms,
+      "mode": "real",
+      "final_answer_hash": "",
+      "evaluator": "runner_error",
+      "error_type": error_details["error_type"],
+      "error_message": error_details["error_message"],
+    }
+  )
+  return {
+    "run_id": run_id,
+    "method": method.name,
+    "benchmark": task["benchmark"],
+    "task_id": task["task_id"],
+    "repeat_pass": repeat_index + 1,
+    "success": False,
+    "latency_ms": latency_ms,
+    "agent_cost_usd": 0.0,
+    "agent_prompt_tokens": 0,
+    "agent_completion_tokens": 0,
+    "prediction": {"error": error_details},
+    "gold_answer": task.get("gold", {}).get("answer"),
+    "score_details": error_details,
   }
 
 
@@ -1782,6 +2060,27 @@ def main() -> int:
   parser.add_argument("--output-dir", type=Path, default=None)
   parser.add_argument("--finance-top-k", type=int, default=6)
   parser.add_argument(
+    "--benchmarks",
+    default="tau2-bench,financebench,promptpg-tabmwp",
+    help="Comma-separated benchmark names to run.",
+  )
+  parser.add_argument(
+    "--repeat-passes",
+    type=int,
+    default=1,
+    help="Run the same selected tasks multiple times inside each method+benchmark cache scope.",
+  )
+  parser.add_argument("--tau2-timeout", type=int, default=300)
+  parser.add_argument("--tau2-subprocess-timeout", type=int, default=420)
+  parser.add_argument("--provider-timeout", type=int, default=180)
+  parser.add_argument("--provider-retries", type=int, default=2)
+  parser.add_argument("--provider-retry-backoff", type=float, default=2.0)
+  parser.add_argument(
+    "--continue-on-task-error",
+    action="store_true",
+    help="Record task-level runner errors as failed tasks instead of aborting the whole run.",
+  )
+  parser.add_argument(
     "--method-suite",
     choices=["main", "table1", "ablation", "table2", "mechanism", "table3", "all"],
     default="main",
@@ -1795,6 +2094,18 @@ def main() -> int:
   api_key = os.environ.get("DEEPSEEK_API_KEY")
   if not api_key:
     raise RuntimeError("DEEPSEEK_API_KEY is not set; fill local .env before running real samples")
+  if args.repeat_passes < 1:
+    raise RuntimeError("--repeat-passes must be >= 1")
+  benchmarks = [item.strip() for item in args.benchmarks.split(",") if item.strip()]
+  unknown_benchmarks = [benchmark for benchmark in benchmarks if benchmark not in BENCHMARK_TASK_FILES]
+  if unknown_benchmarks:
+    raise RuntimeError(f"unknown benchmark(s): {', '.join(unknown_benchmarks)}")
+  if not benchmarks:
+    raise RuntimeError("--benchmarks must select at least one benchmark")
+  if args.tau2_timeout < 1 or args.tau2_subprocess_timeout < 1:
+    raise RuntimeError("--tau2-timeout and --tau2-subprocess-timeout must be >= 1")
+  if args.provider_timeout < 1 or args.provider_retries < 0 or args.provider_retry_backoff < 0:
+    raise RuntimeError("--provider-timeout must be >= 1, --provider-retries >= 0, and --provider-retry-backoff >= 0")
   methods = select_methods(args.method_suite)
 
   run_dir = args.output_dir or ROOT / "outputs" / "workcache_benchmarks" / args.exp_id
@@ -1825,7 +2136,8 @@ def main() -> int:
     "api_key_value_stored": False,
     "created_at": utc_now(),
     "limit_per_benchmark": args.limit,
-    "benchmarks": ["tau2-bench", "financebench", "promptpg-tabmwp"],
+    "repeat_passes": args.repeat_passes,
+    "benchmarks": benchmarks,
     "cache_scope_rule": "cache state is isolated by method and benchmark within this run",
     "hypha_commit": hypha_commit(),
     "pricing": {
@@ -1846,30 +2158,86 @@ def main() -> int:
       "python": str(TAU2_PYTHON),
       "script": str(TAU2_OFFICIAL_RUNNER),
       "fallback_score_allowed": False,
+      "timeout_seconds": args.tau2_timeout,
+      "subprocess_timeout_seconds": args.tau2_subprocess_timeout,
+      "continue_on_task_error": args.continue_on_task_error,
+    },
+    "provider_retries": {
+      "timeout_seconds": args.provider_timeout,
+      "max_retries": args.provider_retries,
+      "retry_backoff_seconds": args.provider_retry_backoff,
+      "transient_errors": [
+        "TimeoutError",
+        "URLError",
+        "IncompleteRead",
+        "RemoteDisconnected",
+        "HTTP 408/409/425/429/5xx",
+      ],
     },
   }
   write_json(run_dir / "config.json", config)
 
-  client = DeepSeekClient(model=model, base_url=base_url, api_key=api_key)
+  client = DeepSeekClient(
+    model=model,
+    base_url=base_url,
+    api_key=api_key,
+    timeout_seconds=args.provider_timeout,
+    max_retries=args.provider_retries,
+    retry_backoff_seconds=args.provider_retry_backoff,
+  )
   predictions: list[dict[str, Any]] = []
   for method in methods:
     for benchmark in config["benchmarks"]:
       cache = HyphaWorkCacheSession(method, benchmark, run_dir)
       tasks = read_jsonl(BENCHMARK_TASK_FILES[benchmark], args.limit)
-      for task in tasks:
-        predictions.append(
-          run_task(
-            client,
-            records,
-            run_dir,
-            args.exp_id,
-            method,
-            cache,
-            benchmark,
-            task,
-            args.finance_top_k,
+      for repeat_index in range(args.repeat_passes):
+        for task_index, task in enumerate(tasks, start=1):
+          run_id = task_run_id(args.exp_id, method, benchmark, task, repeat_index, args.repeat_passes)
+          print(
+            f"[{utc_now()}] task {task_index}/{len(tasks)} pass "
+            f"{repeat_index + 1}/{args.repeat_passes} | {method.name} | "
+            f"{benchmark} | {task['task_id']}",
+            flush=True,
           )
-        )
+          task_started = time.perf_counter()
+          try:
+            predictions.append(
+              run_task(
+                client,
+                records,
+                run_dir,
+                args.exp_id,
+                method,
+                cache,
+                benchmark,
+                task,
+                args.finance_top_k,
+                repeat_index=repeat_index,
+                repeat_count=args.repeat_passes,
+                tau2_timeout=args.tau2_timeout,
+                tau2_subprocess_timeout=args.tau2_subprocess_timeout,
+              )
+            )
+          except Exception as error:
+            if not args.continue_on_task_error:
+              raise
+            latency_ms = round((time.perf_counter() - task_started) * 1000, 2)
+            print(
+              f"[{utc_now()}] task failed and recorded | {method.name} | "
+              f"{benchmark} | {task['task_id']} | {type(error).__name__}: {str(error)[:300]}",
+              flush=True,
+            )
+            predictions.append(
+              record_task_failure(
+                records,
+                run_id,
+                task,
+                method,
+                error,
+                latency_ms,
+                repeat_index,
+              )
+            )
       append_hypha_cache_snapshot(records, cache, cache.replay_snapshot())
 
   for rel_path, rows in records.items():
@@ -1884,6 +2252,7 @@ def main() -> int:
   print(f"run_dir: {run_dir}")
   print(f"model: {model}")
   print(f"method_suite: {args.method_suite}")
+  print(f"repeat_passes: {args.repeat_passes}")
   print(f"methods: {', '.join(method.name for method in methods)}")
   print(f"tasks: {summary['total_tasks']}")
   print(f"success_rate: {summary['overall_success_rate']:.4f}")

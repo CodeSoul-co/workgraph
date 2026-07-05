@@ -67,6 +67,9 @@ python3 experiments/workcache_benchmarks/run_real_samples.py --limit 1 --method-
 ```
 
 The real runner requires local `.env` API keys and the upstream tau2 virtual environment at `external/benchmarks/tau2-bench/.venv`. If tau2 official execution fails, the run stops instead of writing a substitute score.
+Use `--repeat-passes N` to rerun the same selected tasks inside the same method+benchmark cache scope. This is the intended warm-cache design check: traces keep pass-specific `run_id` values, while cache reuse remains isolated to the benchmark and method being evaluated.
+Use `--benchmarks financebench,promptpg-tabmwp` for staged runs, and `--continue-on-task-error` only when a large run should record official runner timeouts or task-level infrastructure errors as failed tasks instead of discarding the whole run.
+Provider-backed direct LLM calls use bounded retries for transient transport failures. Tune them with `--provider-timeout`, `--provider-retries`, and `--provider-retry-backoff`; failed attempts are recorded in response payload files and successful costs still come from the final provider usage.
 
 ## Metrics
 
@@ -86,4 +89,4 @@ Table 3 computes:
 - Demand Recall: predicted-needed demand targets divided by actual-needed demand targets.
 - Critical Path Hit Rate: cache hits on critical path nodes divided by critical path nodes.
 - Eviction Mistake Rate: evictions followed by recomputation divided by evictions.
-- Tree Lookup p95: p95 cache lookup latency in milliseconds.
+- Tree Lookup p95: p95 latency of Hypha `workcache.lookup` audit events in milliseconds.
