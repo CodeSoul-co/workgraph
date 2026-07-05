@@ -1,0 +1,34 @@
+{
+  "prepared_on": "2026-07-05",
+  "benchmarks": {
+    "tau2-bench": {
+      "source": "https://github.com/sierra-research/tau2-bench",
+      "local_path": "external/benchmarks/tau2-bench",
+      "expected_commit": "1901a301961cbbe3fd11f3e84a2a376530c759e3",
+      "environment": "uv sync --extra dev",
+      "python": ">=3.12,<3.14"
+    },
+    "webarena": {
+      "source": "https://github.com/web-arena-x/webarena",
+      "local_path": "external/benchmarks/webarena",
+      "expected_commit": "dce04686a56253aefba7b18a4fa0937cf1dc987b",
+      "environment": "Python 3.10, Playwright, self-hosted websites",
+      "raw_task_config": "external/benchmarks/webarena/config_files/test.raw.json"
+    },
+    "financebench": {
+      "source": "https://huggingface.co/datasets/PatronusAI/financebench",
+      "pdf_source": "https://github.com/patronus-ai/financebench/tree/main/pdfs",
+      "dataset_sha": "e04404e3a97f69f79c14d42f24981a1c9c3bcd18",
+      "local_jsonl": "data/raw/benchmarks/financebench/financebench_merged.jsonl",
+      "local_pdfs": "data/raw/benchmarks/financebench/pdfs",
+      "license": "cc-by-nc-4.0"
+    },
+    "PromptPG": {
+      "source": "https://github.com/lupantech/PromptPG",
+      "local_path": "external/benchmarks/PromptPG",
+      "expected_commit": "5a1a52214521590b075f545b76a4f5ce666345e3",
+      "environment": "Python 3.8.10, legacy OpenAI API, CUDA-era PyTorch for training",
+      "dataset_path": "external/benchmarks/PromptPG/data/tabmwp"
+    }
+  }
+}

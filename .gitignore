@@ -27,12 +27,15 @@ __pycache__/
 
 # Virtual environments.
 .venv/
+.venv-*/
 venv/
 env/
+envs/
 
 # Experiment data and generated artifacts.
 data/raw/
 data/private/
+external/
 outputs/
 runs/
 artifacts/
