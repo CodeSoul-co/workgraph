@@ -22,6 +22,8 @@ The benchmark-specific flow plan is defined in `config/agent_flows.json` and mir
 - FinanceBench: use fixed retrieval over local PDFs; record retrieved page hashes, prompt assemblies, calculations, evidence, and answer scoring.
 - PromptPG/TabMWP: use evaluation-only table math; record table parsing, calculator/tool calls, normalized answer, and exact/normalized scoring.
 
+The tau2 runner keeps the official half-duplex communication protocol enabled. Some OpenAI-compatible providers return assistant messages containing both text and `tool_calls`; tau2 treats those as protocol errors, so the runner normalizes them to tool-call-only messages and stores the removed text in `protocol_normalization` metadata.
+
 Prompts live in `prompts/` for FinanceBench, TabMWP, and simulation-only documentation. Real tau2-bench runs use the upstream tau2 agent/user prompts captured in tau2 verbose LLM logs; gold answers and evaluator metadata stay out of the agent context.
 
 ## Required Trace Outputs

@@ -72,7 +72,8 @@ def run_hypha_bridge(args: argparse.Namespace, operations: list[dict[str, Any]])
 
 def message_to_dict(message: Any) -> dict[str, Any]:
   dumped = message.model_dump(mode="json")
-  return {
+  raw_data = dumped.get("raw_data") or {}
+  row = {
     "role": dumped.get("role"),
     "content": dumped.get("content"),
     "tool_calls": dumped.get("tool_calls"),
@@ -84,6 +85,48 @@ def message_to_dict(message: Any) -> dict[str, Any]:
     "usage": dumped.get("usage"),
     "generation_time_seconds": dumped.get("generation_time_seconds"),
   }
+  if isinstance(raw_data, dict) and raw_data.get("workgraph_protocol_normalization"):
+    row["protocol_normalization"] = raw_data["workgraph_protocol_normalization"]
+  return row
+
+
+def normalize_half_duplex_protocol_message(message: Any, *, call_name: str | None) -> Any:
+  """tau2 half-duplex mode rejects messages that contain text and tool calls."""
+  tool_calls = getattr(message, "tool_calls", None)
+  content = getattr(message, "content", None)
+  if not tool_calls or not isinstance(content, str) or not content.strip():
+    return message
+
+  raw_data = getattr(message, "raw_data", None)
+  if isinstance(raw_data, dict):
+    next_raw_data = dict(raw_data)
+  else:
+    next_raw_data = {"original_raw_data": raw_data}
+  next_raw_data["workgraph_protocol_normalization"] = {
+    "reason": "tau2_half_duplex_disallows_text_with_tool_calls",
+    "call_name": call_name,
+    "original_content": content,
+  }
+  message.raw_data = next_raw_data
+  message.content = None
+  return message
+
+
+def install_protocol_normalization_generate() -> None:
+  import tau2.agent.llm_agent as llm_agent_module
+  import tau2.utils.llm_utils as llm_utils
+
+  original_generate = llm_utils.generate
+
+  def generate_with_protocol_normalization(*args: Any, **kwargs: Any) -> Any:
+    message = original_generate(*args, **kwargs)
+    return normalize_half_duplex_protocol_message(
+      message,
+      call_name=kwargs.get("call_name"),
+    )
+
+  llm_utils.generate = generate_with_protocol_normalization
+  llm_agent_module.generate = generate_with_protocol_normalization
 
 
 def install_workcache_generate(args: argparse.Namespace, source_events: list[dict[str, Any]]) -> None:
@@ -209,6 +252,7 @@ def install_workcache_generate(args: argparse.Namespace, source_events: list[dic
     if lookup.get("hit"):
       message = cached_message(lookup)
       if message and (message.has_content() or message.is_tool_call()):
+        normalize_half_duplex_protocol_message(message, call_name=call_name)
         event = make_event(model, request_data, message, cache_reuse=True)
         run_hypha_bridge(args, [{"op": "ingest", "events": [event]}])
         return message
@@ -221,6 +265,7 @@ def install_workcache_generate(args: argparse.Namespace, source_events: list[dic
       call_name=call_name,
       **kwargs,
     )
+    normalize_half_duplex_protocol_message(message, call_name=call_name)
     event = make_event(model, request_data, message, cache_reuse=False)
     run_hypha_bridge(args, [{"op": "ingest", "events": [event]}])
     return message
@@ -323,6 +368,7 @@ def main() -> int:
   configure_provider_env()
   workcache_source_events: list[dict[str, Any]] = []
   install_workcache_generate(args, workcache_source_events)
+  install_protocol_normalization_generate()
   register_non_empty_user()
 
   from tau2.data_model.simulation import TextRunConfig
