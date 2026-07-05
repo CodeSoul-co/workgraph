@@ -16,6 +16,15 @@ Prepared on 2026-07-05 in `/Users/erwin/Downloads/codespace/workgraph`.
 - FinanceBench: JSONL ready; all 84 referenced PDFs downloaded locally.
 - PromptPG: source/data ready; Python 3.8 venv created, but pinned environment is not fully installable on this Apple Silicon host because old `transformers` resolves to `tokenizers==0.12.1` without a local wheel and requires Rust compilation. Upstream also expects CUDA-era PyTorch for training.
 
+## Tool Status
+
+- tau2-bench: knowledge/gym extras installed; BM25, Gym, and sandbox shell setup verified.
+- FinanceBench: PDF parsing, BM25/vector retrieval, data handling, and fuzzy matching tool environment ready.
+- PromptPG/TabMWP: table/math/fuzzy scoring tool environment ready for evaluation-only runs.
+- WebArena: BrowserGym/AgentLab alternate toolchain ready with 812 WebArena tasks registered and Playwright Chromium installed.
+- WebArena official website deployment remains pending because the full site environment requires large Docker/AMI assets; current local free disk is about 93GiB, below the tool script's 250GiB safety threshold.
+- Provider API keys are runtime secrets and are not set in this shell.
+
 ## Evaluation-Only Path
 
 - Use `scripts/benchmarks/export_eval_slices.py --benchmark all` to export fixed evaluation tasks without training.

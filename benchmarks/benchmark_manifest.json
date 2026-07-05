@@ -5,6 +5,12 @@
     "default_output_dir": "outputs/benchmarks/eval_slices",
     "requires_training": false
   },
+  "tool_setup": {
+    "setup_script": "scripts/benchmarks/setup_benchmark_tools.sh",
+    "check_script": "scripts/benchmarks/check_benchmark_tools.py",
+    "webarena_official_assets_script": "scripts/benchmarks/prepare_webarena_docker_assets.sh",
+    "ignored_tool_root": "external/tools"
+  },
   "benchmarks": {
     "tau2-bench": {
       "source": "https://github.com/sierra-research/tau2-bench",

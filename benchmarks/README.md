@@ -29,6 +29,17 @@ scripts/benchmarks/bootstrap.sh env-promptpg
 scripts/benchmarks/check_benchmarks.py
 ```
 
+## Tool Setup
+
+Prepare benchmark tools and alternatives:
+
+```sh
+scripts/benchmarks/setup_benchmark_tools.sh all
+scripts/benchmarks/check_benchmark_tools.py
+```
+
+See [tools.md](tools.md) for the tool matrix, pending runtime secrets, and WebArena official site deployment notes.
+
 ## Evaluation-Only Export
 
 Training is not required for the local Workgraph comparison path. Export neutral task slices from the fixed benchmark data:
