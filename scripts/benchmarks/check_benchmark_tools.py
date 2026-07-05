@@ -13,6 +13,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def load_dotenv(path: Path) -> None:
+  if not path.exists():
+    return
+  for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+      continue
+    if line.startswith("export "):
+      line = line[len("export ") :].strip()
+    key, value = line.split("=", 1)
+    key = key.strip()
+    value = value.strip().strip('"').strip("'")
+    if key and key not in os.environ:
+      os.environ[key] = value
+
+
 def print_result(status: str, item: str, detail: str = "") -> None:
   suffix = f" - {detail}" if detail else ""
   print(f"{status}: {item}{suffix}")
@@ -134,7 +150,12 @@ def check_webarena_official_sites() -> bool:
 
 
 def check_api_keys() -> bool:
-  optional_keys = ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"]
+  optional_keys = [
+    "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+  ]
   any_present = False
   for key in optional_keys:
     if os.environ.get(key):
@@ -159,6 +180,8 @@ def write_report(results: dict[str, bool]) -> None:
 
 
 def main() -> int:
+  load_dotenv(ROOT / ".env")
+  load_dotenv(ROOT.parent / "Hypha" / ".env")
   results = {
     "system_tools": check_system_tools(),
     "tau2_tools": check_tau2_tools(),

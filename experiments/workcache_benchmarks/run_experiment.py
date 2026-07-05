@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -111,6 +112,48 @@ def hypha_commit() -> str | None:
     return subprocess.check_output(["git", "-C", str(hypha), "rev-parse", "HEAD"], text=True).strip()
   except Exception:
     return None
+
+
+def default_env_file() -> Path:
+  local = ROOT / ".env"
+  if local.exists():
+    return local
+  return ROOT.parent / "Hypha" / ".env"
+
+
+def load_dotenv(path: Path) -> list[str]:
+  if not path.exists():
+    return []
+  loaded: list[str] = []
+  for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+      continue
+    if line.startswith("export "):
+      line = line[len("export ") :].strip()
+    key, value = line.split("=", 1)
+    key = key.strip()
+    value = value.strip().strip('"').strip("'")
+    if key and key not in os.environ:
+      os.environ[key] = value
+      loaded.append(key)
+  return loaded
+
+
+def configured_provider_keys() -> list[str]:
+  keys = [
+    "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "KIMI_API_KEY",
+    "SILICONFLOW_API_KEY",
+    "GROQ_API_KEY",
+    "TOGETHER_API_KEY",
+    "PERPLEXITY_API_KEY",
+  ]
+  return [key for key in keys if os.environ.get(key)]
 
 
 def load_tasks(benchmarks: list[str], limit: int | None) -> dict[str, list[dict[str, Any]]]:
@@ -500,7 +543,13 @@ def simulate_method_task(
   )
 
 
-def write_config(run_dir: Path, exp_id: str, mode: str, tasks: dict[str, list[dict[str, Any]]]) -> None:
+def write_config(
+  run_dir: Path,
+  exp_id: str,
+  mode: str,
+  tasks: dict[str, list[dict[str, Any]]],
+  env_file: Path,
+) -> None:
   config = {
     "experiment_id": exp_id,
     "mode": mode,
@@ -510,6 +559,9 @@ def write_config(run_dir: Path, exp_id: str, mode: str, tasks: dict[str, list[di
     "method_order": [method.name for method in ALL_METHODS],
     "agent_flows": AGENT_FLOWS,
     "hypha_commit": hypha_commit(),
+    "env_file": str(env_file),
+    "env_file_loaded": env_file.exists(),
+    "configured_provider_keys": configured_provider_keys(),
     "timestamp": int(time.time()),
     "note": "simulate mode validates trace and table schemas only; do not report it as empirical performance.",
   }
@@ -544,6 +596,7 @@ def main() -> int:
   parser.add_argument("--benchmarks", default="direct")
   parser.add_argument("--limit", type=int, default=2)
   parser.add_argument("--mode", choices=["simulate"], default="simulate")
+  parser.add_argument("--env-file", type=Path, default=default_env_file())
   parser.add_argument(
     "--output-dir",
     type=Path,
@@ -552,10 +605,12 @@ def main() -> int:
   args = parser.parse_args()
 
   benchmarks = parse_benchmarks(args.benchmarks)
+  env_file = args.env_file if args.env_file.is_absolute() else ROOT / args.env_file
+  load_dotenv(env_file)
   tasks = load_tasks(benchmarks, args.limit)
   run_dir = args.output_dir / args.exp_id
   prepare_run_dir(run_dir)
-  write_config(run_dir, args.exp_id, args.mode, tasks)
+  write_config(run_dir, args.exp_id, args.mode, tasks, env_file)
   run_simulation(run_dir, args.exp_id, tasks)
   table_paths = build_tables(run_dir)
 
@@ -567,4 +622,3 @@ def main() -> int:
 
 if __name__ == "__main__":
   raise SystemExit(main())
-
