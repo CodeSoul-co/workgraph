@@ -50,14 +50,6 @@ The derived fixed tables are:
 
 ## Smoke Run
 
-The local workspace can use the ignored `.env` symlink:
-
-```sh
-ln -sfn ../Hypha/.env .env
-```
-
-`run_experiment.py` loads `.env` by default and records only provider key names in `config.json`, never key values.
-
 Use simulation only to validate schema and table generation:
 
 ```sh
@@ -85,3 +77,4 @@ Table 3 computes:
 - Critical Path Hit Rate: cache hits on critical path nodes divided by critical path nodes.
 - Eviction Mistake Rate: evictions followed by recomputation divided by evictions.
 - Tree Lookup p95: p95 cache lookup latency in milliseconds.
+
