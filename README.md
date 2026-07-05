@@ -21,6 +21,8 @@ git clone --branch cache-base https://github.com/CodeSoul-co/Hypha.git hypha
 
 Use this repository for experiments by default. If an experiment requires a Hypha core change, make that change in the Hypha checkout and follow its `AGENTS.md` rules:
 
+- Workgraph should do fair experimental performance comparisons only. Do not describe performance as the result of experiment-side optimization.
+- If fair comparison requires Hypha performance tuning or bug fixes, make those changes on Hypha `cache-base`, validate them, and push only to `origin/cache-base` unless the change affects non-cache Hypha core functionality.
 - Work on `dev` by default.
 - Use `cache-base` only for cache-specific work.
 - Do not sync `cache-base` changes back to `dev` or `main` unless explicitly requested.
