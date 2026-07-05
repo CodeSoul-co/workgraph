@@ -85,6 +85,7 @@ class MethodSpec:
 BASE_CACHE_CONFIG = {
   "PromptPrefixTree": True,
   "PlanTree": True,
+  "ComputationTree": True,
   "ToolTree": True,
   "ObservationTree": True,
   "VerificationTree": True,
@@ -108,6 +109,7 @@ TABLE1_METHODS = (
     cache_config(
       PromptPrefixTree=False,
       PlanTree=False,
+      ComputationTree=False,
       ToolTree=False,
       ObservationTree=False,
       VerificationTree=False,
@@ -123,6 +125,7 @@ TABLE1_METHODS = (
     "Only static prompt template reuse enabled",
     cache_config(
       PlanTree=False,
+      ComputationTree=False,
       ToolTree=False,
       ObservationTree=False,
       VerificationTree=False,
@@ -137,6 +140,7 @@ TABLE1_METHODS = (
     "Only planning artifact reuse enabled",
     cache_config(
       PromptPrefixTree=False,
+      ComputationTree=False,
       ToolTree=False,
       ObservationTree=False,
       VerificationTree=False,
@@ -152,6 +156,7 @@ TABLE1_METHODS = (
     cache_config(
       PromptPrefixTree=False,
       PlanTree=False,
+      ComputationTree=False,
       ObservationTree=False,
       VerificationTree=False,
       WorkGraphDemand=False,
@@ -245,8 +250,8 @@ ALL_METHODS = TABLE1_METHODS + tuple(
 AGENT_FLOWS: dict[str, dict[str, Any]] = {
   "tau2-bench": {
     "task_family": "interactive customer-support task with domain tools",
-    "preferred_evaluator": "Upstream tau2 CLI/user simulator and domain reward checks",
-    "prompt": "prompts/tau2_agent.md",
+    "preferred_evaluator": "Upstream tau2 runner, user simulator, domain tools, and reward checks",
+    "prompt": "upstream tau2 llm_agent/user_simulator prompts captured from verbose LLM logs",
     "tools": [
       "tau2 domain tools",
       "knowledge/BM25 retrieval when the domain supports it",
@@ -257,9 +262,9 @@ AGENT_FLOWS: dict[str, dict[str, Any]] = {
       "Plan the conversation goal without exposing gold evaluation criteria.",
       "Interact with the user simulator and call tau2 domain tools as needed.",
       "Record each LLM turn, tool call, cache lookup, work graph node, and verification result.",
-      "Score with upstream action, database, and communication assertions.",
+      "Score with upstream tau2 reward_info from action, database, NL, and communication assertions.",
     ],
-    "success_metric": "official tau2 task success or normalized reward",
+    "success_metric": "official tau2 reward_info.reward >= 1.0",
   },
   "financebench": {
     "task_family": "open-book financial QA over company filings",
@@ -300,4 +305,3 @@ AGENT_FLOWS: dict[str, dict[str, Any]] = {
     "success_metric": "exact or normalized answer accuracy",
   },
 }
-

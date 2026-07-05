@@ -12,15 +12,17 @@ WebArena is intentionally excluded from the direct-run table path until the offi
 
 This code is for fair experiment orchestration and trace analysis only. It does not tune benchmark-side logic to improve performance. If a fair comparison requires Hypha runtime or cache fixes, make those changes in the Hypha checkout under the branch rules.
 
+Cache behavior in real runs is delegated to the Hypha `cache-base` WorkCache package through `hypha_workcache_bridge.js`. The experiment runner may translate benchmark events into Hypha `FrameworkEvent` records, but cache keys, lookups, materialization, writes, work graph nodes, and demand signals must come from Hypha WorkCache.
+
 ## Agent Flows
 
 The benchmark-specific flow plan is defined in `config/agent_flows.json` and mirrored in `protocol.py`.
 
-- tau2-bench: use the upstream interactive task flow and domain tools; record policy checks, tool calls, user-simulator turns, and official reward outputs.
+- tau2-bench: use the upstream interactive task flow, user simulator, domain tools, and official reward outputs through `tau2_official_runner.py`; no fallback judge is allowed.
 - FinanceBench: use fixed retrieval over local PDFs; record retrieved page hashes, prompt assemblies, calculations, evidence, and answer scoring.
 - PromptPG/TabMWP: use evaluation-only table math; record table parsing, calculator/tool calls, normalized answer, and exact/normalized scoring.
 
-Prompts live in `prompts/` and explicitly keep gold answers and evaluator metadata out of the agent context.
+Prompts live in `prompts/` for FinanceBench, TabMWP, and simulation-only documentation. Real tau2-bench runs use the upstream tau2 agent/user prompts captured in tau2 verbose LLM logs; gold answers and evaluator metadata stay out of the agent context.
 
 ## Required Trace Outputs
 
@@ -58,6 +60,14 @@ python3 experiments/workcache_benchmarks/run_experiment.py --exp-id smoke --limi
 
 The output goes under ignored `outputs/workcache_benchmarks/smoke/`.
 
+Use the real provider-backed runner to validate official tau2 and Hypha WorkCache integration:
+
+```sh
+python3 experiments/workcache_benchmarks/run_real_samples.py --limit 1 --method-suite main --exp-id real_hypha_workcache_official_tau2_smoke
+```
+
+The real runner requires local `.env` API keys and the upstream tau2 virtual environment at `external/benchmarks/tau2-bench/.venv`. If tau2 official execution fails, the run stops instead of writing a substitute score.
+
 ## Metrics
 
 Table 1 and Table 2 compute:
@@ -77,4 +87,3 @@ Table 3 computes:
 - Critical Path Hit Rate: cache hits on critical path nodes divided by critical path nodes.
 - Eviction Mistake Rate: evictions followed by recomputation divided by evictions.
 - Tree Lookup p95: p95 cache lookup latency in milliseconds.
-
