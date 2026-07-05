@@ -20,6 +20,7 @@ If a task requires changing Hypha itself, switch to the Hypha checkout and follo
 
 - Use this repository to do, and only do, fair experimental performance comparisons. Report performance as comparison evidence, not as experiment-side optimization claims.
 - If fair comparison requires performance tuning or bug fixes in Hypha, make those changes in the Hypha checkout on `cache-base`, validate them there, and push only to `origin/cache-base`. If the change affects non-cache Hypha core functionality, follow the Hypha core workflow instead.
+- Build concrete experiment workflows, experiment MAS implementations, experiment configs, and evaluation scripts in this repository. Implement reusable MAS support or Hypha framework capabilities, such as a message bus, runtime communication abstractions, event contracts, or core adapters, in the Hypha core checkout instead.
 - Put runnable experiment code in `experiments/`.
 - Put reproducible scripts in `scripts/`.
 - Put notebooks in `notebooks/`.
