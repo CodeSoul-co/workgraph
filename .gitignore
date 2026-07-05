@@ -1,0 +1,50 @@
+# Core library checkout or symlink, managed in CodeSoul-co/Hypha.
+hypha
+hypha/
+Hypha
+Hypha/
+core/hypha
+core/hypha/
+core/Hypha
+core/Hypha/
+
+# Local environment and secrets.
+.env
+.env.*
+!.env.example
+secrets/
+
+# Dependencies, builds, and caches.
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Virtual environments.
+.venv/
+venv/
+env/
+
+# Experiment data and generated artifacts.
+data/raw/
+data/private/
+outputs/
+runs/
+artifacts/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.onnx
+*.pt
+*.pth
