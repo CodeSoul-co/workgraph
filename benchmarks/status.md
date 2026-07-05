@@ -16,6 +16,13 @@ Prepared on 2026-07-05 in `/Users/erwin/Downloads/codespace/workgraph`.
 - FinanceBench: JSONL ready; all 84 referenced PDFs downloaded locally.
 - PromptPG: source/data ready; Python 3.8 venv created, but pinned environment is not fully installable on this Apple Silicon host because old `transformers` resolves to `tokenizers==0.12.1` without a local wheel and requires Rust compilation. Upstream also expects CUDA-era PyTorch for training.
 
+## Evaluation-Only Path
+
+- Use `scripts/benchmarks/export_eval_slices.py --benchmark all` to export fixed evaluation tasks without training.
+- The export script uses only the Python standard library and local benchmark assets.
+- This path is enough for Workgraph-side fair comparisons: run candidate agents/MAS workflows against `input`, keep `gold` hidden from prompts, and score outputs with benchmark-specific rules.
+- Verified export counts: tau2 2,556; WebArena 812; FinanceBench 150; PromptPG/TabMWP test1k 1,000.
+
 ## Data Counts
 
 - WebArena raw tasks: 812.

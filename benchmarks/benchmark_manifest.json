@@ -1,5 +1,10 @@
 {
   "prepared_on": "2026-07-05",
+  "evaluation_only_export": {
+    "script": "scripts/benchmarks/export_eval_slices.py",
+    "default_output_dir": "outputs/benchmarks/eval_slices",
+    "requires_training": false
+  },
   "benchmarks": {
     "tau2-bench": {
       "source": "https://github.com/sierra-research/tau2-bench",

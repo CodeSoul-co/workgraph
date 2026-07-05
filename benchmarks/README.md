@@ -29,6 +29,16 @@ scripts/benchmarks/bootstrap.sh env-promptpg
 scripts/benchmarks/check_benchmarks.py
 ```
 
+## Evaluation-Only Export
+
+Training is not required for the local Workgraph comparison path. Export neutral task slices from the fixed benchmark data:
+
+```sh
+scripts/benchmarks/export_eval_slices.py --benchmark all
+```
+
+The generated JSONL files go to `outputs/benchmarks/eval_slices/` and stay ignored. See [evaluation_only.md](evaluation_only.md) for the implementation boundary.
+
 ## Benchmark Notes
 
 ### tau2-bench
