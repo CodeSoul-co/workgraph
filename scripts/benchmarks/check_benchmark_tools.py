@@ -134,7 +134,18 @@ def check_webarena_official_sites() -> bool:
 
 
 def check_api_keys() -> bool:
-  optional_keys = ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"]
+  optional_keys = [
+    "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY",
+    "KIMI_API_KEY",
+    "SILICONFLOW_API_KEY",
+    "GROQ_API_KEY",
+    "TOGETHER_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+  ]
   any_present = False
   for key in optional_keys:
     if os.environ.get(key):

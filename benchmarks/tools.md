@@ -50,8 +50,24 @@ References:
 No API keys are committed. Set keys in the runtime shell or a local ignored `.env` when running model-backed evaluations:
 
 ```sh
-export OPENAI_API_KEY=...
-export OPENROUTER_API_KEY=...
+cp .env.example .env
+# edit .env, then load it for the current shell
+set -a
+. ./.env
+set +a
 ```
+
+Supported provider variables in the template:
+
+- `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL`
+- `OPENAI_API_KEY` / `OPENAI_BASE_URL`
+- `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL`
+- `KIMI_API_KEY` / `KIMI_BASE_URL`
+- `SILICONFLOW_API_KEY` / `SILICONFLOW_BASE_URL`
+- `GROQ_API_KEY` / `GROQ_BASE_URL`
+- `TOGETHER_API_KEY` / `TOGETHER_BASE_URL`
+- `PERPLEXITY_API_KEY` / `PERPLEXITY_BASE_URL`
+- `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`
+- `GOOGLE_API_KEY`
 
 tau2 dense retrieval and reranker variants require the provider keys documented by tau2. WebArena/AgentLab model agents require provider keys. FinanceBench and TabMWP can also run with local rule-based scorers after predictions are generated.
