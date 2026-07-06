@@ -12,26 +12,23 @@ git clone https://github.com/CodeSoul-co/workgraph.git
 cd workgraph
 ```
 
-Clone or place Hypha next to `workgraph` if the server does not already have it:
+Hypha is prepared by the setup script below. It creates or updates the ignored
+`workgraph/hypha` checkout on `cache-base`, which is the path the runner uses by
+default.
+
+## Restore Data And Prepare Tools
+
+Copy the local transfer archive to the server and place it at the workgraph repo
+root, or pass its path to the setup script.
 
 ```bash
-cd ..
-git clone https://github.com/CodeSoul-co/Hypha.git
-cd Hypha
-git checkout cache-base
-cd ../workgraph
+DEEPSEEK_API_KEY=replace_with_server_key \
+  bash scripts/benchmarks/server_prepare_workcache.sh ./workcache_server_data_20260706.tar.gz
 ```
 
-The runner expects Hypha at `../Hypha` by default for the current run command.
-
-## Restore Data Package
-
-Copy the local transfer archive to the server and extract it at the workgraph
-repo root:
-
-```bash
-tar -xzf workcache_server_data_20260706.tar.gz -C /path/to/workgraph
-```
+If `.env` already exists, the setup script leaves it unchanged. If it does not
+exist and `DEEPSEEK_API_KEY` is provided, the script creates `.env` with
+`WORKGRAPH_MODEL=deepseek-v4-pro` and `DEEPSEEK_BASE_URL=https://api.deepseek.com/v1`.
 
 The package contains:
 
@@ -43,17 +40,14 @@ It intentionally does not contain `.env`, API keys, Python virtualenvs, or
 ignored dependency checkouts. It also does not contain interrupted benchmark
 checkpoints; the server run should start fresh.
 
-## Server Dependencies
+The setup script also installs or prepares:
 
-Install local tools and benchmark dependencies:
-
-```bash
-scripts/benchmarks/bootstrap.sh clone
-scripts/benchmarks/bootstrap.sh env-tau2
-scripts/benchmarks/setup_benchmark_tools.sh tau2
-scripts/benchmarks/setup_benchmark_tools.sh financebench
-scripts/benchmarks/setup_benchmark_tools.sh tabmwp
-```
+- `workgraph/hypha` from `CodeSoul-co/Hypha` on `cache-base`
+- external benchmark repos under `external/benchmarks/`
+- tau2-bench Python environment and sandbox runtime
+- FinanceBench local tools
+- PromptPG/TabMWP local tools
+- benchmark data readiness checks
 
 Make sure these command-line tools exist on the server:
 
@@ -65,39 +59,25 @@ pdftotext -v
 rg --version
 ```
 
-## Environment
-
-Create `.env` on the server. Do not commit it.
-
-```bash
-cat > .env <<'EOF'
-WORKGRAPH_MODEL=deepseek-v4-pro
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-DEEPSEEK_API_KEY=replace_with_server_key
-EOF
-```
-
 ## Fresh Run Command
 
 Start the 50-sample run. The `all` method suite is ordered as:
 `No Cache -> WorkCache Full -> remaining baselines/ablations/mechanisms`.
 
 ```bash
-python3 experiments/workcache_benchmarks/run_real_samples.py \
-  --limit 50 \
-  --benchmarks tau2-bench,financebench,promptpg-tabmwp \
-  --method-suite all \
-  --repeat-passes 2 \
-  --continue-on-task-error \
-  --tau2-timeout 300 \
-  --tau2-subprocess-timeout 420 \
-  --provider-timeout 180 \
-  --provider-retries 2 \
-  --provider-retry-backoff 2.0 \
-  --exp-id real_hypha_all_50x2_server
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background
 ```
 
-Add `--resume` only if the server run is interrupted after it has started.
+Add `--resume` only if the server run is interrupted after it has started:
+
+```bash
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --resume
+```
+
+The background launcher writes:
+
+- `outputs/workcache_benchmarks/jobs/real_hypha_all_50x2_server.pid`
+- `outputs/workcache_benchmarks/jobs/real_hypha_all_50x2_server.log`
 
 ## Expected Outputs
 
