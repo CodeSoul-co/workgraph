@@ -52,6 +52,14 @@ DEEPSEEK_API_KEY=replace_with_server_key \
   bash scripts/benchmarks/server_prepare_workcache.sh ./workcache_server_data_20260706.tar.gz
 ```
 
+The setup script installs Hypha npm dependencies from `https://registry.npmmirror.com`
+by default. Override it if another mirror is faster on the server:
+
+```sh
+NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/ \
+  bash scripts/benchmarks/server_prepare_workcache.sh ./workcache_server_data_20260706.tar.gz
+```
+
 Hypha requires Node.js >=18. On AutoDL/conda hosts, install a compatible Node if
 the setup script reports an older version:
 

@@ -7,6 +7,7 @@ ARCHIVE_INPUT="${1:-$DEFAULT_ARCHIVE}"
 HYPHA_DIR="${HYPHA_DIR:-$ROOT_DIR/hypha}"
 HYPHA_URL="${HYPHA_URL:-https://github.com/CodeSoul-co/Hypha.git}"
 HYPHA_BRANCH="${HYPHA_BRANCH:-cache-base}"
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 
 resolve_archive() {
   local input="$1"
@@ -85,7 +86,22 @@ prepare_hypha() {
 build_hypha_workcache() {
   echo "Building Hypha WorkCache package"
   cd "$HYPHA_DIR"
-  npm ci
+
+  if [[ "${SKIP_HYPHA_NPM_CI:-0}" != "1" ]]; then
+    echo "Installing Hypha npm dependencies from $NPM_REGISTRY"
+    npm ci \
+      --registry="$NPM_REGISTRY" \
+      --prefer-online \
+      --no-audit \
+      --no-fund \
+      --progress=false \
+      --fetch-retries=5 \
+      --fetch-retry-mintimeout=20000 \
+      --fetch-retry-maxtimeout=120000
+  else
+    echo "Skipping Hypha npm dependency install because SKIP_HYPHA_NPM_CI=1"
+  fi
+
   npm run build --workspace @hypha/workcache
 
   if [[ ! -f "$HYPHA_DIR/packages/workcache/dist/index.js" ]]; then

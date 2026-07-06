@@ -99,7 +99,7 @@ fi
 if [[ ! -f "$ROOT_DIR/hypha/packages/workcache/dist/index.js" ]]; then
   echo "Missing Hypha WorkCache build at $ROOT_DIR/hypha/packages/workcache/dist/index.js" >&2
   echo "Run scripts/benchmarks/server_prepare_workcache.sh again, or run:" >&2
-  echo "  cd $ROOT_DIR/hypha && npm ci && npm run build --workspace @hypha/workcache" >&2
+  echo "  cd $ROOT_DIR/hypha && npm ci --registry=https://registry.npmmirror.com --no-audit --no-fund --progress=false && npm run build --workspace @hypha/workcache" >&2
   exit 1
 fi
 

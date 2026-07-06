@@ -50,6 +50,14 @@ The setup script also installs or prepares:
 - PromptPG/TabMWP local tools
 - benchmark data readiness checks
 
+Hypha npm dependencies are installed from `https://registry.npmmirror.com` by
+default. Override the mirror when needed:
+
+```bash
+NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/ \
+  bash scripts/benchmarks/server_prepare_workcache.sh ./workcache_server_data_20260706.tar.gz
+```
+
 Make sure these command-line tools exist on the server:
 
 ```bash
