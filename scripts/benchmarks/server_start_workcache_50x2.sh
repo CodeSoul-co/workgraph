@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXP_ID="${WORKCACHE_EXP_ID:-real_hypha_all_50x2_server}"
-LIMIT="${WORKCACHE_LIMIT:-50}"
+SAMPLE_LIMIT="${WORKCACHE_SAMPLE_LIMIT:-${WORKCACHE_LIMIT:-50}}"
 BENCHMARKS="${WORKCACHE_BENCHMARKS:-tau2-bench,financebench,promptpg-tabmwp}"
 REPEAT_PASSES="${WORKCACHE_REPEAT_PASSES:-2}"
 BACKGROUND=0
@@ -12,10 +12,12 @@ RESUME=0
 usage() {
   cat <<'EOF'
 Usage: scripts/benchmarks/server_start_workcache_50x2.sh [--background] [--resume]
+       scripts/benchmarks/server_start_workcache_50x2.sh [--sample-limit N|all]
 
 Environment overrides:
   WORKCACHE_EXP_ID          default: real_hypha_all_50x2_server
-  WORKCACHE_LIMIT           default: 50
+  WORKCACHE_SAMPLE_LIMIT    default: 50; accepts a positive integer or all
+  WORKCACHE_LIMIT           legacy alias used only when WORKCACHE_SAMPLE_LIMIT is unset
   WORKCACHE_BENCHMARKS      default: tau2-bench,financebench,promptpg-tabmwp
   WORKCACHE_REPEAT_PASSES   default: 2
 EOF
@@ -31,6 +33,14 @@ while (($#)); do
       ;;
     --resume)
       RESUME=1
+      ;;
+    --sample-limit|--limit)
+      if [[ $# -lt 2 ]]; then
+        echo "$1 requires a value: positive integer or all" >&2
+        exit 2
+      fi
+      SAMPLE_LIMIT="$2"
+      shift
       ;;
     -h|--help)
       usage
@@ -56,10 +66,16 @@ if [[ ! -f "$ROOT_DIR/.env" && -z "${DEEPSEEK_API_KEY:-}" ]]; then
   exit 1
 fi
 
+NORMALIZED_SAMPLE_LIMIT="$(printf '%s' "$SAMPLE_LIMIT" | tr '[:upper:]' '[:lower:]')"
+if [[ "$NORMALIZED_SAMPLE_LIMIT" != "all" && ! "$SAMPLE_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--sample-limit must be a positive integer or all; got: $SAMPLE_LIMIT" >&2
+  exit 2
+fi
+
 CMD=(
   python3
   experiments/workcache_benchmarks/run_real_samples.py
-  --limit "$LIMIT"
+  --sample-limit "$SAMPLE_LIMIT"
   --benchmarks "$BENCHMARKS"
   --method-suite all
   --repeat-passes "$REPEAT_PASSES"

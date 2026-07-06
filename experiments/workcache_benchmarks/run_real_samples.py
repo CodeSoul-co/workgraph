@@ -162,13 +162,26 @@ def load_dotenv(path: Path) -> None:
     os.environ.setdefault(key, value)
 
 
-def read_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
+def parse_sample_limit(value: str) -> int | None:
+  normalized = value.strip().lower()
+  if normalized == "all":
+    return None
+  try:
+    parsed = int(value)
+  except ValueError as exc:
+    raise argparse.ArgumentTypeError("--sample-limit must be a positive integer or 'all'") from exc
+  if parsed < 1:
+    raise argparse.ArgumentTypeError("--sample-limit must be a positive integer or 'all'")
+  return parsed
+
+
+def read_jsonl(path: Path, limit: int | None) -> list[dict[str, Any]]:
   rows: list[dict[str, Any]] = []
   with path.open("r", encoding="utf-8") as handle:
     for line in handle:
       if line.strip():
         rows.append(json.loads(line))
-      if len(rows) >= limit:
+      if limit is not None and len(rows) >= limit:
         break
   return rows
 
@@ -2502,7 +2515,18 @@ def summarize(
 
 def main() -> int:
   parser = argparse.ArgumentParser()
-  parser.add_argument("--limit", type=int, default=3)
+  parser.add_argument(
+    "--limit",
+    "--sample-limit",
+    dest="sample_limit",
+    type=parse_sample_limit,
+    default=3,
+    metavar="N|all",
+    help=(
+      "Tasks to select per benchmark. Use a positive integer or 'all'. "
+      "If N exceeds a benchmark slice length, all available tasks in that benchmark are used."
+    ),
+  )
   parser.add_argument("--exp-id", default="real_deepseek_v4_pro_3x3")
   parser.add_argument("--output-dir", type=Path, default=None)
   parser.add_argument("--finance-top-k", type=int, default=6)
@@ -2567,6 +2591,13 @@ def main() -> int:
   if args.stop_after_task_runs < 0:
     raise RuntimeError("--stop-after-task-runs must be >= 0")
   methods = select_methods(args.method_suite)
+  sample_limit_config: int | str = "all" if args.sample_limit is None else args.sample_limit
+  selected_tasks_by_benchmark = {
+    benchmark: read_jsonl(BENCHMARK_TASK_FILES[benchmark], args.sample_limit) for benchmark in benchmarks
+  }
+  selected_task_counts_by_benchmark = {
+    benchmark: len(tasks) for benchmark, tasks in selected_tasks_by_benchmark.items()
+  }
 
   run_dir = args.output_dir or ROOT / "outputs" / "workcache_benchmarks" / args.exp_id
   prepare_run_dir(run_dir, resume=args.resume)
@@ -2590,7 +2621,13 @@ def main() -> int:
     "api_key_present": True,
     "api_key_value_stored": False,
     "created_at": utc_now(),
-    "limit_per_benchmark": args.limit,
+    "limit_per_benchmark": sample_limit_config,
+    "sample_selection": {
+      "mode": "first_n_per_benchmark" if args.sample_limit is not None else "all_per_benchmark",
+      "requested_limit_per_benchmark": sample_limit_config,
+      "selected_task_counts_by_benchmark": selected_task_counts_by_benchmark,
+      "over_limit_rule": "if the requested limit exceeds a benchmark slice length, all available tasks are used",
+    },
     "finance_top_k": args.finance_top_k,
     "repeat_passes": args.repeat_passes,
     "benchmarks": benchmarks,
@@ -2674,7 +2711,7 @@ def main() -> int:
   for method in methods:
     for benchmark in config["benchmarks"]:
       cache = HyphaWorkCacheSession(method, benchmark, run_dir)
-      tasks = read_jsonl(BENCHMARK_TASK_FILES[benchmark], args.limit)
+      tasks = selected_tasks_by_benchmark[benchmark]
       expected_run_ids = expected_scope_run_ids(
         args.exp_id,
         method,

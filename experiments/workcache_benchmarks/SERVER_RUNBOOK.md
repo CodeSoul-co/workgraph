@@ -68,6 +68,17 @@ Start the 50-sample run. The `all` method suite is ordered as:
 bash scripts/benchmarks/server_start_workcache_50x2.sh --background
 ```
 
+Choose a different sample count per benchmark, or all available tasks per
+benchmark:
+
+```bash
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --sample-limit all
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --sample-limit 1000
+```
+
+If the requested count is larger than one benchmark's available slice, that
+benchmark uses all available tasks.
+
 Add `--resume` only if the server run is interrupted after it has started:
 
 ```bash
