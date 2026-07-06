@@ -8,6 +8,7 @@ HYPHA_DIR="${HYPHA_DIR:-$ROOT_DIR/hypha}"
 HYPHA_URL="${HYPHA_URL:-https://github.com/CodeSoul-co/Hypha.git}"
 HYPHA_BRANCH="${HYPHA_BRANCH:-cache-base}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+HYPHA_WORKCACHE_DIST_ARCHIVE="${HYPHA_WORKCACHE_DIST_ARCHIVE:-$ROOT_DIR/hypha_workcache_dist_fa98498.tar.gz}"
 
 resolve_archive() {
   local input="$1"
@@ -85,6 +86,22 @@ prepare_hypha() {
 
 build_hypha_workcache() {
   echo "Building Hypha WorkCache package"
+
+  if [[ -f "$HYPHA_WORKCACHE_DIST_ARCHIVE" ]]; then
+    echo "Using prebuilt Hypha WorkCache dist archive: $HYPHA_WORKCACHE_DIST_ARCHIVE"
+    first_entry="$(tar -tzf "$HYPHA_WORKCACHE_DIST_ARCHIVE" | head -n 1)"
+    if [[ "$first_entry" == hypha/* || "$first_entry" == "hypha/" ]]; then
+      tar -xzf "$HYPHA_WORKCACHE_DIST_ARCHIVE" -C "$ROOT_DIR"
+    else
+      tar -xzf "$HYPHA_WORKCACHE_DIST_ARCHIVE" -C "$HYPHA_DIR"
+    fi
+    if [[ ! -f "$HYPHA_DIR/packages/workcache/dist/index.js" ]]; then
+      echo "Prebuilt archive did not provide packages/workcache/dist/index.js" >&2
+      exit 1
+    fi
+    return 0
+  fi
+
   cd "$HYPHA_DIR"
 
   if [[ "${SKIP_HYPHA_NPM_CI:-0}" != "1" ]]; then

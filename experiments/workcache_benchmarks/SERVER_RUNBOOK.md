@@ -58,6 +58,10 @@ NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/ \
   bash scripts/benchmarks/server_prepare_workcache.sh ./workcache_server_data_20260706.tar.gz
 ```
 
+If npm is slow or unavailable, upload `hypha_workcache_dist_fa98498.tar.gz` to
+the repo root before running setup. The setup script will use that prebuilt
+Hypha WorkCache dist package and skip npm install/build for WorkCache.
+
 Make sure these command-line tools exist on the server:
 
 ```bash
