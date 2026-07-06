@@ -121,6 +121,7 @@ TABLE1_METHODS = (
     ),
     "table1",
   ),
+  MethodSpec("WorkCache Full", "None", cache_config(), "table1"),
   MethodSpec(
     "Prompt Template Only",
     "Only static prompt template reuse enabled",
@@ -166,7 +167,6 @@ TABLE1_METHODS = (
     ),
     "table1",
   ),
-  MethodSpec("WorkCache Full", "None", cache_config(), "table1"),
 )
 
 TABLE2_METHODS = (
@@ -245,9 +245,7 @@ TABLE3_METHODS = (
 )
 
 ALL_METHODS = (
-  TABLE1_METHODS[0],
-  TABLE1_METHODS[-1],
-  *TABLE1_METHODS[1:-1],
+  *TABLE1_METHODS,
   *(method for method in TABLE2_METHODS + TABLE3_METHODS if method.name != "WorkCache Full"),
 )
 
