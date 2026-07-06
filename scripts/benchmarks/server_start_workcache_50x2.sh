@@ -3,9 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ALL_BENCHMARKS="tau2-bench,financebench,promptpg-tabmwp"
-EXP_ID="${WORKCACHE_EXP_ID:-real_hypha_all_50x2_server}"
+EXP_ID="${WORKCACHE_EXP_ID:-}"
 SAMPLE_LIMIT="${WORKCACHE_SAMPLE_LIMIT:-${WORKCACHE_LIMIT:-50}}"
 BENCHMARKS="${WORKCACHE_BENCHMARKS:-$ALL_BENCHMARKS}"
+METHOD_SUITE="${WORKCACHE_METHOD_SUITE:-all}"
 REPEAT_PASSES="${WORKCACHE_REPEAT_PASSES:-2}"
 BACKGROUND=0
 RESUME=0
@@ -13,15 +14,21 @@ RESUME=0
 usage() {
   cat <<'EOF'
 Usage: scripts/benchmarks/server_start_workcache_50x2.sh [--background] [--resume]
+       scripts/benchmarks/server_start_workcache_50x2.sh [--table table1|table2|table3|all]
+       scripts/benchmarks/server_start_workcache_50x2.sh [--method-suite SUITE]
        scripts/benchmarks/server_start_workcache_50x2.sh [--sample-limit N|all]
        scripts/benchmarks/server_start_workcache_50x2.sh [--benchmark NAME]
        scripts/benchmarks/server_start_workcache_50x2.sh [--benchmarks LIST|all]
+
+Table experiment suites:
+  table1/main, table2/ablation, table3/mechanism, all
 
 Benchmark names:
   tau2-bench, financebench, promptpg-tabmwp
 
 Environment overrides:
-  WORKCACHE_EXP_ID          default: real_hypha_all_50x2_server
+  WORKCACHE_EXP_ID          default: real_hypha_all_50x2_server or real_hypha_<suite>_50x2_server
+  WORKCACHE_METHOD_SUITE    default: all; accepts table1/table2/table3/all
   WORKCACHE_SAMPLE_LIMIT    default: 50; accepts a positive integer or all
   WORKCACHE_LIMIT           legacy alias used only when WORKCACHE_SAMPLE_LIMIT is unset
   WORKCACHE_BENCHMARKS      default: tau2-bench,financebench,promptpg-tabmwp
@@ -39,6 +46,14 @@ while (($#)); do
       ;;
     --resume)
       RESUME=1
+      ;;
+    --table|--method-suite)
+      if [[ $# -lt 2 ]]; then
+        echo "$1 requires table1, table2, table3, or all" >&2
+        exit 2
+      fi
+      METHOD_SUITE="$2"
+      shift
       ;;
     --sample-limit|--limit)
       if [[ $# -lt 2 ]]; then
@@ -122,14 +137,47 @@ normalize_benchmarks() {
   (IFS=','; printf '%s\n' "${selected[*]}")
 }
 
+normalize_method_suite() {
+  local requested
+  requested="$(printf '%s' "$1" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  case "$requested" in
+    all)
+      printf 'all\n'
+      ;;
+    1|table1|main)
+      printf 'table1\n'
+      ;;
+    2|table2|ablation)
+      printf 'table2\n'
+      ;;
+    3|table3|mechanism)
+      printf 'table3\n'
+      ;;
+    *)
+      echo "Unknown table experiment suite: $1" >&2
+      echo "Allowed: table1, table2, table3, all" >&2
+      return 1
+      ;;
+  esac
+}
+
 BENCHMARKS="$(normalize_benchmarks "$BENCHMARKS")"
+METHOD_SUITE="$(normalize_method_suite "$METHOD_SUITE")"
+
+if [[ -z "$EXP_ID" ]]; then
+  if [[ "$METHOD_SUITE" == "all" ]]; then
+    EXP_ID="real_hypha_all_50x2_server"
+  else
+    EXP_ID="real_hypha_${METHOD_SUITE}_50x2_server"
+  fi
+fi
 
 CMD=(
   python3
   experiments/workcache_benchmarks/run_real_samples.py
   --sample-limit "$SAMPLE_LIMIT"
   --benchmarks "$BENCHMARKS"
-  --method-suite all
+  --method-suite "$METHOD_SUITE"
   --repeat-passes "$REPEAT_PASSES"
   --continue-on-task-error
   --tau2-timeout 300

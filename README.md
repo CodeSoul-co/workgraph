@@ -52,11 +52,21 @@ DEEPSEEK_API_KEY=replace_with_server_key \
   bash scripts/benchmarks/server_prepare_workcache.sh ./workcache_server_data_20260706.tar.gz
 ```
 
-Start the default run. By default this runs all three currently prepared
-benchmarks: `tau2-bench`, `financebench`, and `promptpg-tabmwp`.
+Start the default run. By default this runs all three table experiment suites
+and all three currently prepared benchmarks: `tau2-bench`, `financebench`, and
+`promptpg-tabmwp`.
 
 ```sh
 bash scripts/benchmarks/server_start_workcache_50x2.sh --background
+```
+
+Run one table experiment suite, or all table suites explicitly:
+
+```sh
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --table table1
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --table table2
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --table table3
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --table all
 ```
 
 Run a single benchmark, a subset, or all benchmarks explicitly:

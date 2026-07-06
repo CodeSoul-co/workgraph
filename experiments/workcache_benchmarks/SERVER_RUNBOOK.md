@@ -61,11 +61,21 @@ rg --version
 
 ## Fresh Run Command
 
-Start the 50-sample run. The `all` method suite is ordered as:
+Start the 50-sample run. By default this runs all three table experiment suites.
+The `all` method suite is ordered as:
 `No Cache -> WorkCache Full -> remaining baselines/ablations/mechanisms`.
 
 ```bash
 bash scripts/benchmarks/server_start_workcache_50x2.sh --background
+```
+
+Run one table experiment suite, or all table suites explicitly:
+
+```bash
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --table table1
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --table table2
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --table table3
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --table all
 ```
 
 Run one benchmark, a subset, or all benchmarks:
