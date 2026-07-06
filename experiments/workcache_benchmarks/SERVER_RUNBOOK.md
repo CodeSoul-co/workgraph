@@ -43,6 +43,7 @@ checkpoints; the server run should start fresh.
 The setup script also installs or prepares:
 
 - `workgraph/hypha` from `CodeSoul-co/Hypha` on `cache-base`
+- Hypha `@hypha/workcache` dependencies and `packages/workcache/dist`
 - external benchmark repos under `external/benchmarks/`
 - tau2-bench Python environment and sandbox runtime
 - FinanceBench local tools
@@ -57,6 +58,13 @@ node --version
 npm --version
 pdftotext -v
 rg --version
+```
+
+Hypha requires Node.js >=18. On AutoDL/conda hosts, install a compatible Node if
+needed:
+
+```bash
+conda install -y -c conda-forge nodejs=20
 ```
 
 ## Fresh Run Command

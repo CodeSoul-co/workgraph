@@ -630,6 +630,20 @@ def hypha_stable_hash(value: Any) -> str:
   return result["results"][0]["hash"]
 
 
+def preflight_hypha_workcache_runtime(methods: list[MethodSpec]) -> None:
+  requires_workcache = any(any(method.cache_config.values()) for method in methods)
+  if not requires_workcache:
+    return
+  try:
+    hypha_stable_hash({"preflight": "hypha-workcache"})
+  except Exception as error:
+    raise RuntimeError(
+      "Hypha WorkCache runtime preflight failed before paid task calls. "
+      "Build the Hypha WorkCache package with: "
+      "cd hypha && npm ci && npm run build --workspace @hypha/workcache"
+    ) from error
+
+
 class HyphaWorkCacheSession:
   """Thin adapter around Hypha cache-base WorkCacheManager."""
 
@@ -2695,6 +2709,7 @@ def main() -> int:
     method_suite=args.method_suite,
     benchmarks=benchmarks,
   )
+  preflight_hypha_workcache_runtime(methods)
 
   client = DeepSeekClient(
     model=model,

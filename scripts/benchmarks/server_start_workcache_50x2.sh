@@ -89,6 +89,20 @@ if [[ ! -d "$ROOT_DIR/hypha/.git" ]]; then
   exit 1
 fi
 
+NODE_MAJOR="$(node -p "Number(process.versions.node.split('.')[0])")"
+if [[ "$NODE_MAJOR" -lt 18 ]]; then
+  echo "Node.js >=18 is required by Hypha WorkCache; found $(node --version)." >&2
+  echo "On AutoDL/conda hosts, one option is: conda install -y -c conda-forge nodejs=20" >&2
+  exit 1
+fi
+
+if [[ ! -f "$ROOT_DIR/hypha/packages/workcache/dist/index.js" ]]; then
+  echo "Missing Hypha WorkCache build at $ROOT_DIR/hypha/packages/workcache/dist/index.js" >&2
+  echo "Run scripts/benchmarks/server_prepare_workcache.sh again, or run:" >&2
+  echo "  cd $ROOT_DIR/hypha && npm ci && npm run build --workspace @hypha/workcache" >&2
+  exit 1
+fi
+
 if [[ ! -f "$ROOT_DIR/.env" && -z "${DEEPSEEK_API_KEY:-}" ]]; then
   echo "Missing $ROOT_DIR/.env and DEEPSEEK_API_KEY is not set." >&2
   echo "Run server_prepare_workcache.sh with DEEPSEEK_API_KEY=..., or create .env from .env.server.template." >&2

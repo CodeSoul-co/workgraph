@@ -52,6 +52,13 @@ DEEPSEEK_API_KEY=replace_with_server_key \
   bash scripts/benchmarks/server_prepare_workcache.sh ./workcache_server_data_20260706.tar.gz
 ```
 
+Hypha requires Node.js >=18. On AutoDL/conda hosts, install a compatible Node if
+the setup script reports an older version:
+
+```sh
+conda install -y -c conda-forge nodejs=20
+```
+
 Start the default run. By default this runs all three table experiment suites
 and all three currently prepared benchmarks: `tau2-bench`, `financebench`, and
 `promptpg-tabmwp`.

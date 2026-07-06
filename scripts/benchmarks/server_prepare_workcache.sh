@@ -41,6 +41,16 @@ check_commands() {
   fi
 }
 
+check_node_version() {
+  local major
+  major="$(node -p "Number(process.versions.node.split('.')[0])")"
+  if [[ "$major" -lt 18 ]]; then
+    echo "Node.js >=18 is required by Hypha; found $(node --version)." >&2
+    echo "On AutoDL/conda hosts, one option is: conda install -y -c conda-forge nodejs=20" >&2
+    exit 1
+  fi
+}
+
 restore_data() {
   local archive
   if ! archive="$(resolve_archive "$ARCHIVE_INPUT")"; then
@@ -70,6 +80,18 @@ prepare_hypha() {
   git -C "$HYPHA_DIR" checkout "$HYPHA_BRANCH"
   git -C "$HYPHA_DIR" pull --ff-only origin "$HYPHA_BRANCH"
   git -C "$HYPHA_DIR" log --oneline -1
+}
+
+build_hypha_workcache() {
+  echo "Building Hypha WorkCache package"
+  cd "$HYPHA_DIR"
+  npm ci
+  npm run build --workspace @hypha/workcache
+
+  if [[ ! -f "$HYPHA_DIR/packages/workcache/dist/index.js" ]]; then
+    echo "Hypha WorkCache build did not create packages/workcache/dist/index.js" >&2
+    exit 1
+  fi
 }
 
 prepare_tools() {
@@ -110,8 +132,10 @@ EOF
 }
 
 check_commands
+check_node_version
 restore_data
 prepare_hypha
+build_hypha_workcache
 prepare_tools
 prepare_env
 
