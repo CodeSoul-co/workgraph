@@ -37,3 +37,42 @@ Use this repository for experiments by default. If an experiment requires a Hyph
 - `notebooks/`: exploratory notebooks.
 - `scripts/`: local automation for experiments.
 - `docs/`: experiment notes, protocol docs, and summaries.
+
+## Server WorkCache Benchmark Run
+
+Use the server batch scripts to reproduce the current WorkCache benchmark
+environment without committing data, secrets, dependency folders, or generated
+outputs. Copy `workcache_server_data_20260706.tar.gz` to the cloned repo root
+before running the setup command.
+
+Prepare the server environment:
+
+```sh
+DEEPSEEK_API_KEY=replace_with_server_key \
+  bash scripts/benchmarks/server_prepare_workcache.sh ./workcache_server_data_20260706.tar.gz
+```
+
+Start the default run. By default this runs all three currently prepared
+benchmarks: `tau2-bench`, `financebench`, and `promptpg-tabmwp`.
+
+```sh
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background
+```
+
+Run a single benchmark, a subset, or all benchmarks explicitly:
+
+```sh
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --benchmark tau2-bench
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --benchmarks tau2-bench,financebench
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --benchmarks all
+```
+
+Control sample count per benchmark with `--sample-limit N|all`. If `N` exceeds
+one benchmark's available slice length, that benchmark uses all available tasks.
+
+```sh
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --sample-limit all
+```
+
+Use `--resume` only after an interrupted server run, and set `WORKCACHE_EXP_ID`
+when you want separate output directories for separate runs.

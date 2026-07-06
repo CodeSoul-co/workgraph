@@ -68,6 +68,14 @@ Start the 50-sample run. The `all` method suite is ordered as:
 bash scripts/benchmarks/server_start_workcache_50x2.sh --background
 ```
 
+Run one benchmark, a subset, or all benchmarks:
+
+```bash
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --benchmark tau2-bench
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --benchmarks tau2-bench,financebench
+bash scripts/benchmarks/server_start_workcache_50x2.sh --background --benchmarks all
+```
+
 Choose a different sample count per benchmark, or all available tasks per
 benchmark:
 

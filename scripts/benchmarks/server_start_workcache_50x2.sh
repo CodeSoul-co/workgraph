@@ -2,9 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ALL_BENCHMARKS="tau2-bench,financebench,promptpg-tabmwp"
 EXP_ID="${WORKCACHE_EXP_ID:-real_hypha_all_50x2_server}"
 SAMPLE_LIMIT="${WORKCACHE_SAMPLE_LIMIT:-${WORKCACHE_LIMIT:-50}}"
-BENCHMARKS="${WORKCACHE_BENCHMARKS:-tau2-bench,financebench,promptpg-tabmwp}"
+BENCHMARKS="${WORKCACHE_BENCHMARKS:-$ALL_BENCHMARKS}"
 REPEAT_PASSES="${WORKCACHE_REPEAT_PASSES:-2}"
 BACKGROUND=0
 RESUME=0
@@ -13,6 +14,11 @@ usage() {
   cat <<'EOF'
 Usage: scripts/benchmarks/server_start_workcache_50x2.sh [--background] [--resume]
        scripts/benchmarks/server_start_workcache_50x2.sh [--sample-limit N|all]
+       scripts/benchmarks/server_start_workcache_50x2.sh [--benchmark NAME]
+       scripts/benchmarks/server_start_workcache_50x2.sh [--benchmarks LIST|all]
+
+Benchmark names:
+  tau2-bench, financebench, promptpg-tabmwp
 
 Environment overrides:
   WORKCACHE_EXP_ID          default: real_hypha_all_50x2_server
@@ -40,6 +46,14 @@ while (($#)); do
         exit 2
       fi
       SAMPLE_LIMIT="$2"
+      shift
+      ;;
+    --benchmark|--benchmarks)
+      if [[ $# -lt 2 ]]; then
+        echo "$1 requires a benchmark name, comma-separated list, or all" >&2
+        exit 2
+      fi
+      BENCHMARKS="$2"
       shift
       ;;
     -h|--help)
@@ -71,6 +85,44 @@ if [[ "$NORMALIZED_SAMPLE_LIMIT" != "all" && ! "$SAMPLE_LIMIT" =~ ^[1-9][0-9]*$ 
   echo "--sample-limit must be a positive integer or all; got: $SAMPLE_LIMIT" >&2
   exit 2
 fi
+
+normalize_benchmarks() {
+  local requested
+  requested="$(printf '%s' "$1" | tr -d '[:space:]')"
+  if [[ -z "$requested" ]]; then
+    echo "--benchmarks must not be empty" >&2
+    return 1
+  fi
+  if [[ "$(printf '%s' "$requested" | tr '[:upper:]' '[:lower:]')" == "all" ]]; then
+    printf '%s\n' "$ALL_BENCHMARKS"
+    return 0
+  fi
+
+  local IFS=','
+  local parts=($requested)
+  local selected=()
+  local item
+  for item in "${parts[@]}"; do
+    case "$item" in
+      tau2-bench|financebench|promptpg-tabmwp)
+        selected+=("$item")
+        ;;
+      "")
+        echo "Empty benchmark entry in: $1" >&2
+        return 1
+        ;;
+      *)
+        echo "Unknown benchmark: $item" >&2
+        echo "Allowed: $ALL_BENCHMARKS" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  (IFS=','; printf '%s\n' "${selected[*]}")
+}
+
+BENCHMARKS="$(normalize_benchmarks "$BENCHMARKS")"
 
 CMD=(
   python3
