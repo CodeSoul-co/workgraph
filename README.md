@@ -64,6 +64,10 @@ If npm is slow or unavailable, upload `hypha_workcache_dist_fa98498.tar.gz` to
 the repo root before running setup. The setup script will use that prebuilt
 Hypha WorkCache dist package and skip npm install/build for WorkCache.
 
+The real WorkCache run also needs SQLite support in Node. If setup reports that
+`node:sqlite` is missing, use a Node build that includes it or install
+`better-sqlite3` inside the ignored Hypha checkout.
+
 Hypha requires Node.js >=18. On AutoDL/conda hosts, install a compatible Node if
 the setup script reports an older version:
 

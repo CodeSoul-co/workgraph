@@ -630,17 +630,23 @@ def hypha_stable_hash(value: Any) -> str:
   return result["results"][0]["hash"]
 
 
-def preflight_hypha_workcache_runtime(methods: list[MethodSpec]) -> None:
+def preflight_hypha_workcache_runtime(methods: list[MethodSpec], run_dir: Path) -> None:
   requires_workcache = any(any(method.cache_config.values()) for method in methods)
   if not requires_workcache:
     return
   try:
-    hypha_stable_hash({"preflight": "hypha-workcache"})
+    run_hypha_workcache_bridge(
+      {
+        "storeKind": "sqlite",
+        "sqlitePath": str(run_dir / "cache" / "hypha" / "_preflight.sqlite"),
+        "policy": hypha_workcache_policy(next(method for method in methods if any(method.cache_config.values()))),
+        "operations": [{"op": "hashStableJson", "input": {"preflight": "hypha-workcache"}}],
+      }
+    )
   except Exception as error:
     raise RuntimeError(
       "Hypha WorkCache runtime preflight failed before paid task calls. "
-      "Build the Hypha WorkCache package with: "
-      "cd hypha && npm ci && npm run build --workspace @hypha/workcache"
+      "Build packages/workcache/dist and ensure SQLite support through node:sqlite or better-sqlite3."
     ) from error
 
 
@@ -2709,7 +2715,7 @@ def main() -> int:
     method_suite=args.method_suite,
     benchmarks=benchmarks,
   )
-  preflight_hypha_workcache_runtime(methods)
+  preflight_hypha_workcache_runtime(methods, run_dir)
 
   client = DeepSeekClient(
     model=model,

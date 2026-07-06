@@ -89,12 +89,29 @@ build_hypha_workcache() {
 
   if [[ -f "$HYPHA_WORKCACHE_DIST_ARCHIVE" ]]; then
     echo "Using prebuilt Hypha WorkCache dist archive: $HYPHA_WORKCACHE_DIST_ARCHIVE"
-    first_entry="$(tar -tzf "$HYPHA_WORKCACHE_DIST_ARCHIVE" | head -n 1)"
-    if [[ "$first_entry" == hypha/* || "$first_entry" == "hypha/" ]]; then
-      tar -xzf "$HYPHA_WORKCACHE_DIST_ARCHIVE" -C "$ROOT_DIR"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    tar -xzf "$HYPHA_WORKCACHE_DIST_ARCHIVE" -C "$tmp_dir"
+
+    if [[ -f "$tmp_dir/hypha/packages/workcache/dist/index.js" ]]; then
+      rm -rf "$HYPHA_DIR/packages/workcache/dist"
+      mkdir -p "$HYPHA_DIR/packages/workcache"
+      cp -R "$tmp_dir/hypha/packages/workcache/dist" "$HYPHA_DIR/packages/workcache/"
+    elif [[ -f "$tmp_dir/packages/workcache/dist/index.js" ]]; then
+      rm -rf "$HYPHA_DIR/packages/workcache/dist"
+      mkdir -p "$HYPHA_DIR/packages/workcache"
+      cp -R "$tmp_dir/packages/workcache/dist" "$HYPHA_DIR/packages/workcache/"
+    elif [[ -f "$tmp_dir/dist/index.js" ]]; then
+      rm -rf "$HYPHA_DIR/packages/workcache/dist"
+      mkdir -p "$HYPHA_DIR/packages/workcache"
+      cp -R "$tmp_dir/dist" "$HYPHA_DIR/packages/workcache/"
     else
-      tar -xzf "$HYPHA_WORKCACHE_DIST_ARCHIVE" -C "$HYPHA_DIR"
+      rm -rf "$tmp_dir"
+      echo "Prebuilt archive did not provide packages/workcache/dist/index.js" >&2
+      exit 1
     fi
+    rm -rf "$tmp_dir"
+
     if [[ ! -f "$HYPHA_DIR/packages/workcache/dist/index.js" ]]; then
       echo "Prebuilt archive did not provide packages/workcache/dist/index.js" >&2
       exit 1
@@ -125,6 +142,33 @@ build_hypha_workcache() {
     echo "Hypha WorkCache build did not create packages/workcache/dist/index.js" >&2
     exit 1
   fi
+}
+
+check_hypha_workcache_runtime() {
+  echo "Checking Hypha WorkCache runtime"
+  HYPHA_DIR_FOR_NODE="$HYPHA_DIR" node <<'NODE'
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const hyphaRoot = process.env.HYPHA_DIR_FOR_NODE;
+const workcache = require(path.join(hyphaRoot, 'packages', 'workcache', 'dist'));
+const filename = path.join(os.tmpdir(), `hypha-workcache-preflight-${process.pid}.sqlite`);
+
+try {
+  new workcache.SQLiteWorkCacheStore({ filename });
+  console.log('Hypha WorkCache SQLite runtime ok');
+} catch (error) {
+  console.error('Hypha WorkCache SQLite runtime unavailable.');
+  console.error(error && error.stack ? error.stack : String(error));
+  console.error('Install Node.js with node:sqlite support, or install better-sqlite3 in the Hypha checkout.');
+  process.exit(1);
+} finally {
+  try {
+    fs.unlinkSync(filename);
+  } catch (_) {}
+}
+NODE
 }
 
 prepare_tools() {
@@ -169,6 +213,7 @@ check_node_version
 restore_data
 prepare_hypha
 build_hypha_workcache
+check_hypha_workcache_runtime
 prepare_tools
 prepare_env
 

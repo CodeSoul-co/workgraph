@@ -103,6 +103,32 @@ if [[ ! -f "$ROOT_DIR/hypha/packages/workcache/dist/index.js" ]]; then
   exit 1
 fi
 
+if ! HYPHA_DIR_FOR_NODE="$ROOT_DIR/hypha" node <<'NODE'
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const hyphaRoot = process.env.HYPHA_DIR_FOR_NODE;
+const workcache = require(path.join(hyphaRoot, 'packages', 'workcache', 'dist'));
+const filename = path.join(os.tmpdir(), `hypha-workcache-start-preflight-${process.pid}.sqlite`);
+
+try {
+  new workcache.SQLiteWorkCacheStore({ filename });
+} catch (error) {
+  console.error('Hypha WorkCache SQLite runtime unavailable.');
+  console.error(error && error.stack ? error.stack : String(error));
+  console.error('Install Node.js with node:sqlite support, or install better-sqlite3 in the Hypha checkout.');
+  process.exit(1);
+} finally {
+  try {
+    fs.unlinkSync(filename);
+  } catch (_) {}
+}
+NODE
+then
+  exit 1
+fi
+
 if [[ ! -f "$ROOT_DIR/.env" && -z "${DEEPSEEK_API_KEY:-}" ]]; then
   echo "Missing $ROOT_DIR/.env and DEEPSEEK_API_KEY is not set." >&2
   echo "Run server_prepare_workcache.sh with DEEPSEEK_API_KEY=..., or create .env from .env.server.template." >&2
