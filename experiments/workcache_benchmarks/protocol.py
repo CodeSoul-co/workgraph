@@ -244,8 +244,11 @@ TABLE3_METHODS = (
   ),
 )
 
-ALL_METHODS = TABLE1_METHODS + tuple(
-  method for method in TABLE2_METHODS + TABLE3_METHODS if method.name != "WorkCache Full"
+ALL_METHODS = (
+  TABLE1_METHODS[0],
+  TABLE1_METHODS[-1],
+  *TABLE1_METHODS[1:-1],
+  *(method for method in TABLE2_METHODS + TABLE3_METHODS if method.name != "WorkCache Full"),
 )
 
 AGENT_FLOWS: dict[str, dict[str, Any]] = {
